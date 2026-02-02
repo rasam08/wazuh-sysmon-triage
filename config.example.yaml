@@ -1,0 +1,14 @@
+# config.example.yaml
+
+# Example configuration for the wazuh-sysmon-triage tool
+
+start: "2023-01-01T00:00:00Z"  # Start time in ISO8601 format
+end: "2023-01-02T00:00:00Z"    # End time in ISO8601 format
+agent_id: "agent-123"           # Agent ID to filter
+agent_name: "agent-name"        # Agent name to filter
+out_dir: "./output"             # Output directory for results
+host: "http://localhost:9200"   # OpenSearch host
+user: "admin"                   # OpenSearch username
+pass: "password"                # OpenSearch password
+verify_tls: false                # Verify TLS certificate
+index_pattern: "wazuh-alerts-4.x-*"  # Index pattern for OpenSearch

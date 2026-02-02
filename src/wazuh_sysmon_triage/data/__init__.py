@@ -1,0 +1,1 @@
+"""Embedded data assets (Sigma-style mappings, etc.)."""

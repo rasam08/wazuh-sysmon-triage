@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+.venv_*/
+venv/
+
+# Packaging
+build/
+dist/
+*.egg-info/
+
+# Test + coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.coverage.*
+
+# Linters/type-checkers
+.ruff_cache/
+.mypy_cache/
+
+# Editors/OS
+.vscode/
+.DS_Store
+
+# Project outputs
+out/
+output/
+out_*/
