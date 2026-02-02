@@ -1,24 +1,26 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from contextlib import contextmanager
-from time import perf_counter
-from typing import Optional, Iterator
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from time import perf_counter
 from uuid import uuid4
 
 
 @dataclass
 class RunContext:
     run_id: str = field(default_factory=lambda: str(uuid4()))
-    case_id: Optional[str] = None
-    started_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    case_id: str | None = None
+    started_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
     params: dict = field(default_factory=dict)
 
 
 @contextmanager
-def timed(stage: str, logger: logging.Logger, ctx: RunContext, extra: Optional[dict] = None) -> Iterator[dict]:
+def timed(
+    stage: str, logger: logging.Logger, ctx: RunContext, extra: dict | None = None
+) -> Iterator[dict]:
     payload = dict(extra or {})
     logger.info(
         "Stage started",

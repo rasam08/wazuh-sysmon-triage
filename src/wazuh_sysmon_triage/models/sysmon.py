@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any, Optional, Union
+from datetime import UTC, datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -9,22 +9,22 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 def _to_utc(value: Any) -> datetime:
     if isinstance(value, datetime):
         if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc)
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
     if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(value, tz=timezone.utc)
+        return datetime.fromtimestamp(value, tz=UTC)
     if isinstance(value, str):
         text = value.strip()
         if text.endswith("Z"):
             text = text[:-1] + "+00:00"
         parsed = datetime.fromisoformat(text)
         if parsed.tzinfo is None:
-            return parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc)
+            return parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
     raise TypeError("Unsupported datetime value")
 
 
-def _to_optional_utc(value: Any) -> Optional[datetime]:
+def _to_optional_utc(value: Any) -> datetime | None:
     if value is None:
         return None
     return _to_utc(value)
@@ -36,7 +36,7 @@ def _to_int(value: Any) -> int:
     return int(value)
 
 
-def _to_optional_int(value: Any) -> Optional[int]:
+def _to_optional_int(value: Any) -> int | None:
     if value is None:
         return None
     if isinstance(value, bool):
@@ -50,7 +50,7 @@ def _to_str(value: Any) -> str:
     return str(value)
 
 
-def _to_optional_str(value: Any) -> Optional[str]:
+def _to_optional_str(value: Any) -> str | None:
     if value is None:
         return None
     return str(value)
@@ -61,15 +61,15 @@ class BaseEvent(BaseModel):
 
     event_id: int = Field(..., description="Sysmon event ID")
     timestamp: datetime
-    agent_id: Optional[str] = None
-    agent_name: Optional[str] = None
-    agent_ip: Optional[str] = None
-    rule_id: Optional[str] = None
-    rule_description: Optional[str] = None
+    agent_id: str | None = None
+    agent_name: str | None = None
+    agent_ip: str | None = None
+    rule_id: str | None = None
+    rule_description: str | None = None
     mitre_techniques: list[str] = Field(default_factory=list)
-    computer: Optional[str] = None
-    channel: Optional[str] = None
-    record_id: Optional[str] = None
+    computer: str | None = None
+    channel: str | None = None
+    record_id: str | None = None
     kind: str = "sysmon"
     event_type: str
 
@@ -101,26 +101,30 @@ class ProcessCreateEvent(BaseEvent):
     process_guid: str
     process_id: int
     image: str
-    command_line: Optional[str] = None
-    current_directory: Optional[str] = None
-    user: Optional[str] = None
-    parent_process_guid: Optional[str] = None
-    parent_process_id: Optional[int] = None
-    parent_image: Optional[str] = None
-    parent_command_line: Optional[str] = None
-    hashes: Optional[str] = None
-    integrity_level: Optional[str] = None
+    command_line: str | None = None
+    current_directory: str | None = None
+    user: str | None = None
+    parent_process_guid: str | None = None
+    parent_process_id: int | None = None
+    parent_image: str | None = None
+    parent_command_line: str | None = None
+    hashes: str | None = None
+    integrity_level: str | None = None
 
     _coerce_process_guid = field_validator("process_guid", mode="before")(_to_str)
     _coerce_process_id = field_validator("process_id", mode="before")(_to_int)
     _coerce_image = field_validator("image", mode="before")(_to_str)
     _coerce_command_line = field_validator("command_line", mode="before")(_to_optional_str)
-    _coerce_current_directory = field_validator("current_directory", mode="before")(_to_optional_str)
+    _coerce_current_directory = field_validator("current_directory", mode="before")(
+        _to_optional_str
+    )
     _coerce_user = field_validator("user", mode="before")(_to_optional_str)
     _coerce_parent_guid = field_validator("parent_process_guid", mode="before")(_to_optional_str)
     _coerce_parent_pid = field_validator("parent_process_id", mode="before")(_to_optional_int)
     _coerce_parent_image = field_validator("parent_image", mode="before")(_to_optional_str)
-    _coerce_parent_command_line = field_validator("parent_command_line", mode="before")(_to_optional_str)
+    _coerce_parent_command_line = field_validator("parent_command_line", mode="before")(
+        _to_optional_str
+    )
     _coerce_hashes = field_validator("hashes", mode="before")(_to_optional_str)
     _coerce_integrity_level = field_validator("integrity_level", mode="before")(_to_optional_str)
 
@@ -133,8 +137,8 @@ class FileCreateEvent(BaseEvent):
     process_id: int
     image: str
     target_filename: str
-    creation_utc_time: Optional[datetime] = None
-    user: Optional[str] = None
+    creation_utc_time: datetime | None = None
+    user: str | None = None
 
     _coerce_process_guid = field_validator("process_guid", mode="before")(_to_str)
     _coerce_process_id = field_validator("process_id", mode="before")(_to_int)
@@ -153,7 +157,7 @@ class NetworkConnectEvent(BaseEvent):
     image: str
     destination_ip: str
     destination_port: int
-    protocol: Optional[str] = None
+    protocol: str | None = None
 
     _coerce_process_guid = field_validator("process_guid", mode="before")(_to_str)
     _coerce_process_id = field_validator("process_id", mode="before")(_to_int)
@@ -163,4 +167,4 @@ class NetworkConnectEvent(BaseEvent):
     _coerce_protocol = field_validator("protocol", mode="before")(_to_optional_str)
 
 
-SysmonEvent = Union[ProcessCreateEvent, FileCreateEvent, NetworkConnectEvent]
+SysmonEvent = ProcessCreateEvent | FileCreateEvent | NetworkConnectEvent

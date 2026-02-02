@@ -1,13 +1,17 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from wazuh_sysmon_triage.models.sysmon import FileCreateEvent, NetworkConnectEvent, ProcessCreateEvent
+from wazuh_sysmon_triage.models.sysmon import (
+    FileCreateEvent,
+    NetworkConnectEvent,
+    ProcessCreateEvent,
+)
 from wazuh_sysmon_triage.pipeline.correlate import correlate_data
 
 
 def test_correlate_data_process_chain_and_artifact() -> None:
     parent = ProcessCreateEvent(
         event_id=1,
-        timestamp=datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+        timestamp=datetime(2024, 1, 1, 0, 0, 0, tzinfo=UTC),
         agent_id="010",
         agent_name="anon",
         process_guid="{PARENT}",
@@ -18,7 +22,7 @@ def test_correlate_data_process_chain_and_artifact() -> None:
     )
     child = ProcessCreateEvent(
         event_id=1,
-        timestamp=datetime(2024, 1, 1, 0, 1, 0, tzinfo=timezone.utc),
+        timestamp=datetime(2024, 1, 1, 0, 1, 0, tzinfo=UTC),
         agent_id="010",
         agent_name="anon",
         process_guid="{CHILD}",
@@ -32,14 +36,14 @@ def test_correlate_data_process_chain_and_artifact() -> None:
     )
     file_event = FileCreateEvent(
         event_id=11,
-        timestamp=datetime(2024, 1, 1, 0, 2, 0, tzinfo=timezone.utc),
+        timestamp=datetime(2024, 1, 1, 0, 2, 0, tzinfo=UTC),
         agent_id="010",
         agent_name="anon",
         process_guid="{CHILD}",
         process_id=200,
         image="C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
         target_filename="C:\\ProgramData\\lab_demo.ps1",
-        creation_utc_time=datetime(2024, 1, 1, 0, 1, 59, tzinfo=timezone.utc),
+        creation_utc_time=datetime(2024, 1, 1, 0, 1, 59, tzinfo=UTC),
         user="HOST\\user",
     )
 
@@ -64,7 +68,7 @@ def test_correlate_data_process_chain_and_artifact() -> None:
 def test_correlate_tags_and_network_activity() -> None:
     process = ProcessCreateEvent(
         event_id=1,
-        timestamp=datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+        timestamp=datetime(2024, 1, 1, 0, 0, 0, tzinfo=UTC),
         agent_id="010",
         agent_name="anon",
         process_guid="{GUID}",
@@ -75,7 +79,7 @@ def test_correlate_tags_and_network_activity() -> None:
     )
     net = NetworkConnectEvent(
         event_id=3,
-        timestamp=datetime(2024, 1, 1, 0, 0, 10, tzinfo=timezone.utc),
+        timestamp=datetime(2024, 1, 1, 0, 0, 10, tzinfo=UTC),
         agent_id="010",
         agent_name="anon",
         process_guid="{GUID}",

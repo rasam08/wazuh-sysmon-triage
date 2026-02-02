@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from datetime import datetime
+from typing import Any
 
 from wazuh_sysmon_triage.clients.opensearch_client import OpenSearchClient
 from wazuh_sysmon_triage.models.raw import RawHit
@@ -10,9 +11,9 @@ from wazuh_sysmon_triage.models.raw import RawHit
 
 @dataclass
 class FetchResult:
-    hits: List[RawHit]
+    hits: list[RawHit]
     truncated: bool
-    reason: Optional[str]
+    reason: str | None
     fetched_count: int
 
 
@@ -22,12 +23,12 @@ DEFAULT_EVENT_IDS = (1, 11)
 def build_sysmon_query(
     start: str,
     end: str,
-    agent_id: Optional[str] = None,
-    agent_name: Optional[str] = None,
-    event_ids: Optional[Iterable[int]] = None,
+    agent_id: str | None = None,
+    agent_name: str | None = None,
+    event_ids: Iterable[int] | None = None,
     size: int = 1000,
     agent_mode: str = "any",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Build the OpenSearch DSL query for Sysmon EID 1 and 11 in Wazuh alerts.
 
@@ -48,7 +49,7 @@ def build_sysmon_query(
         },
     ]
 
-    filters: List[Dict[str, Any]] = [
+    filters: list[dict[str, Any]] = [
         {"range": {"@timestamp": {"gte": start, "lte": end}}},
         {"bool": {"should": eid_should, "minimum_should_match": 1}},
     ]
@@ -116,13 +117,13 @@ def fetch_sysmon_events(
     index_pattern: str,
     start_dt: str | datetime,
     end_dt: str | datetime,
-    agent_id: Optional[str],
-    agent_name: Optional[str],
+    agent_id: str | None,
+    agent_name: str | None,
     event_ids: Sequence[int] = (1, 11),
     page_size: int = 1000,
     agent_mode: str = "any",
-    run_id: Optional[str] = None,
-    case_id: Optional[str] = None,
+    run_id: str | None = None,
+    case_id: str | None = None,
     max_events: int = 20000,
     max_pages: int = 200,
 ) -> FetchResult:
@@ -140,10 +141,10 @@ def fetch_sysmon_events(
     )
 
     pit_id = client.create_pit(index_pattern, run_id=run_id, case_id=case_id)
-    search_after: Optional[list] = None
-    hits: List[RawHit] = []
+    search_after: list[Any] | None = None
+    hits: list[RawHit] = []
     truncated = False
-    reason: Optional[str] = None
+    reason: str | None = None
     pages = 0
     try:
         while True:
@@ -159,7 +160,7 @@ def fetch_sysmon_events(
                 run_id=run_id,
                 case_id=case_id,
             )
-            page_hits: List[RawHit] = response.get("hits", {}).get("hits", [])
+            page_hits: list[RawHit] = response.get("hits", {}).get("hits", [])
             if not page_hits:
                 break
             for hit in page_hits:
@@ -171,7 +172,7 @@ def fetch_sysmon_events(
             if truncated:
                 break
             last_sort = page_hits[-1].get("sort")
-            if not last_sort:
+            if not isinstance(last_sort, list):
                 break
             search_after = last_sort
     finally:
@@ -185,7 +186,7 @@ def fetch_sysmon_events(
     )
 
 
-def fetch_data(agent_id: str, start: str, end: str, agent_name: Optional[str] = None) -> dict:
+def fetch_data(agent_id: str, start: str, end: str, agent_name: str | None = None) -> dict:
     """
     Build a query for data based on agent selectors and time range.
 

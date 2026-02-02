@@ -6,7 +6,6 @@ from typer.testing import CliRunner
 import wazuh_sysmon_triage.cli as cli
 from wazuh_sysmon_triage.pipeline.fetch import FetchResult
 
-
 runner = CliRunner()
 
 
@@ -124,10 +123,7 @@ def test_run_case_id_outputs(tmp_path, monkeypatch) -> None:
 
 def test_run_offline_ndjson(tmp_path) -> None:
     sample_path = (
-        Path(__file__).resolve().parents[1]
-        / "samples"
-        / "incident_001"
-        / "raw_hits.ndjson"
+        Path(__file__).resolve().parents[1] / "samples" / "incident_001" / "raw_hits.ndjson"
     )
 
     out_dir = tmp_path / "out"

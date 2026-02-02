@@ -1,11 +1,14 @@
 import pytest
+
 from wazuh_sysmon_triage.config import Config
+
 
 def test_config_loading_from_yaml():
     """Test loading configuration from a YAML file."""
     config = Config.from_yaml("config.example.yaml")
     assert config is not None
     assert config.index_pattern == "wazuh-alerts-4.x-*"
+
 
 def test_config_validation():
     """Test validation of configuration settings."""
@@ -18,11 +21,12 @@ def test_config_validation():
         "user": "admin",
         "pass": "password",
         "verify_tls": True,
-        "index_pattern": "wazuh-alerts-4.x-*"
+        "index_pattern": "wazuh-alerts-4.x-*",
     }
     config = Config(**valid_data)
     assert config.agent_id == "12345"
     assert config.verify_tls is True
+
 
 def test_config_invalid_data():
     """Test that invalid configuration data raises validation errors."""
@@ -35,7 +39,7 @@ def test_config_invalid_data():
         "user": "admin",
         "pass": "password",
         "verify_tls": True,
-        "index_pattern": "wazuh-alerts-4.x-*"
+        "index_pattern": "wazuh-alerts-4.x-*",
     }
     with pytest.raises(ValueError):
         Config(**invalid_data)

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional
+from collections.abc import Iterable, Mapping
+from datetime import UTC, datetime
+from typing import Any
 
 from wazuh_sysmon_triage.models.raw import RawHit
 from wazuh_sysmon_triage.models.sysmon import (
@@ -12,11 +13,10 @@ from wazuh_sysmon_triage.models.sysmon import (
     SysmonEvent,
 )
 
-
 LOGGER = logging.getLogger(__name__)
 
 
-def _to_int(value: Any) -> Optional[int]:
+def _to_int(value: Any) -> int | None:
     if value is None:
         return None
     try:
@@ -25,27 +25,27 @@ def _to_int(value: Any) -> Optional[int]:
         return None
 
 
-def _parse_dt(value: Any) -> Optional[datetime]:
+def _parse_dt(value: Any) -> datetime | None:
     if value is None:
         return None
     if isinstance(value, datetime):
         if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc)
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
     if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(value, tz=timezone.utc)
+        return datetime.fromtimestamp(value, tz=UTC)
     if isinstance(value, str):
         text = value.strip()
         if text.endswith("Z"):
             text = text[:-1] + "+00:00"
         parsed = datetime.fromisoformat(text)
         if parsed.tzinfo is None:
-            return parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc)
+            return parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
     return None
 
 
-def get_ci(mapping: Optional[Dict[str, Any]], *keys: str) -> Any:
+def get_ci(mapping: Mapping[str, Any] | None, *keys: str) -> Any:
     if not mapping:
         return None
     for key in keys:
@@ -62,7 +62,7 @@ def get_ci(mapping: Optional[Dict[str, Any]], *keys: str) -> Any:
     return None
 
 
-def _normalize_mitre(value: Any) -> List[str]:
+def _normalize_mitre(value: Any) -> list[str]:
     if value is None:
         return []
     if isinstance(value, str):
@@ -74,11 +74,11 @@ def _normalize_mitre(value: Any) -> List[str]:
     return [str(item) for item in value]
 
 
-def normalize_data(raw_data: Iterable[RawHit]) -> List[SysmonEvent]:
+def normalize_data(raw_data: Iterable[RawHit]) -> list[SysmonEvent]:
     """
     Normalize raw OpenSearch hits into SysmonEvent models.
     """
-    normalized: List[SysmonEvent] = []
+    normalized: list[SysmonEvent] = []
 
     for hit in raw_data:
         source = hit.get("_source") or {}
@@ -121,22 +121,23 @@ def normalize_data(raw_data: Iterable[RawHit]) -> List[SysmonEvent]:
             if not process_guid or process_id is None or not image:
                 LOGGER.warning("Dropping EID 1 missing required fields")
                 continue
-            model = ProcessCreateEvent(
-                **common,
-                process_guid=process_guid,
-                process_id=process_id,
-                image=image,
-                command_line=get_ci(eventdata, "commandLine"),
-                current_directory=get_ci(eventdata, "currentDirectory"),
-                user=get_ci(eventdata, "user"),
-                parent_process_guid=get_ci(eventdata, "parentProcessGuid"),
-                parent_process_id=_to_int(get_ci(eventdata, "parentProcessId")),
-                parent_image=get_ci(eventdata, "parentImage"),
-                parent_command_line=get_ci(eventdata, "parentCommandLine"),
-                hashes=get_ci(eventdata, "hashes"),
-                integrity_level=get_ci(eventdata, "integrityLevel"),
+            normalized.append(
+                ProcessCreateEvent(
+                    **common,
+                    process_guid=process_guid,
+                    process_id=process_id,
+                    image=image,
+                    command_line=get_ci(eventdata, "commandLine"),
+                    current_directory=get_ci(eventdata, "currentDirectory"),
+                    user=get_ci(eventdata, "user"),
+                    parent_process_guid=get_ci(eventdata, "parentProcessGuid"),
+                    parent_process_id=_to_int(get_ci(eventdata, "parentProcessId")),
+                    parent_image=get_ci(eventdata, "parentImage"),
+                    parent_command_line=get_ci(eventdata, "parentCommandLine"),
+                    hashes=get_ci(eventdata, "hashes"),
+                    integrity_level=get_ci(eventdata, "integrityLevel"),
+                )
             )
-            normalized.append(model)
         elif event_id == 11:
             process_guid = get_ci(eventdata, "processGuid")
             process_id = _to_int(get_ci(eventdata, "processId"))
@@ -145,16 +146,17 @@ def normalize_data(raw_data: Iterable[RawHit]) -> List[SysmonEvent]:
             if not process_guid or process_id is None or not image or not target_filename:
                 LOGGER.warning("Dropping EID 11 missing required fields")
                 continue
-            model = FileCreateEvent(
-                **common,
-                process_guid=process_guid,
-                process_id=process_id,
-                image=image,
-                target_filename=target_filename,
-                creation_utc_time=_parse_dt(get_ci(eventdata, "creationUtcTime")),
-                user=get_ci(eventdata, "user"),
+            normalized.append(
+                FileCreateEvent(
+                    **common,
+                    process_guid=process_guid,
+                    process_id=process_id,
+                    image=image,
+                    target_filename=target_filename,
+                    creation_utc_time=_parse_dt(get_ci(eventdata, "creationUtcTime")),
+                    user=get_ci(eventdata, "user"),
+                )
             )
-            normalized.append(model)
         elif event_id == 3:
             process_guid = get_ci(eventdata, "processGuid")
             process_id = _to_int(get_ci(eventdata, "processId"))
@@ -162,19 +164,26 @@ def normalize_data(raw_data: Iterable[RawHit]) -> List[SysmonEvent]:
             dest_ip = get_ci(eventdata, "destinationIp")
             dest_port = _to_int(get_ci(eventdata, "destinationPort"))
             protocol = get_ci(eventdata, "protocol")
-            if not process_guid or process_id is None or not image or not dest_ip or dest_port is None:
+            if (
+                not process_guid
+                or process_id is None
+                or not image
+                or not dest_ip
+                or dest_port is None
+            ):
                 LOGGER.warning("Dropping EID 3 missing required fields")
                 continue
-            model = NetworkConnectEvent(
-                **common,
-                process_guid=process_guid,
-                process_id=process_id,
-                image=image,
-                destination_ip=dest_ip,
-                destination_port=dest_port,
-                protocol=protocol,
+            normalized.append(
+                NetworkConnectEvent(
+                    **common,
+                    process_guid=process_guid,
+                    process_id=process_id,
+                    image=image,
+                    destination_ip=dest_ip,
+                    destination_port=dest_port,
+                    protocol=protocol,
+                )
             )
-            normalized.append(model)
         else:
             continue
 

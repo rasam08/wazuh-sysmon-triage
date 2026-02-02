@@ -20,7 +20,10 @@ def _find_agent_filter(filters: list) -> dict:
             return item
         if "bool" in item and ("should" in item["bool"] or "filter" in item["bool"]):
             nested = item["bool"].get("should") or item["bool"].get("filter") or []
-            if any("agent.id" in clause.get("term", {}) or "agent.name" in clause.get("term", {}) for clause in nested):
+            if any(
+                "agent.id" in clause.get("term", {}) or "agent.name" in clause.get("term", {})
+                for clause in nested
+            ):
                 return item
     raise AssertionError("Agent filter not found")
 

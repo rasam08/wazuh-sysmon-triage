@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -12,12 +11,12 @@ class Config(BaseModel):
 
     start: str = Field(..., description="Start time in ISO8601 format")
     end: str = Field(..., description="End time in ISO8601 format")
-    agent_id: Optional[str] = Field(None, description="Agent ID")
-    agent_name: Optional[str] = Field(None, description="Agent Name")
+    agent_id: str | None = Field(None, description="Agent ID")
+    agent_name: str | None = Field(None, description="Agent Name")
     out_dir: str = Field(..., description="Output directory")
-    host: Optional[str] = Field(None, description="Host for OpenSearch")
-    user: Optional[str] = Field(None, description="Username for OpenSearch")
-    password: Optional[str] = Field(None, alias="pass", description="Password for OpenSearch")
+    host: str | None = Field(None, description="Host for OpenSearch")
+    user: str | None = Field(None, description="Username for OpenSearch")
+    password: str | None = Field(None, alias="pass", description="Password for OpenSearch")
     verify_tls: bool = Field(True, description="Verify TLS certificate")
     index_pattern: str = Field("wazuh-alerts-4.x-*", description="Index pattern for OpenSearch")
 
@@ -31,8 +30,8 @@ class Config(BaseModel):
         return value
 
     @classmethod
-    def from_yaml(cls, file_path: str) -> "Config":
-        with open(file_path, "r", encoding="utf-8") as file:
+    def from_yaml(cls, file_path: str) -> Config:
+        with open(file_path, encoding="utf-8") as file:
             config_data = yaml.safe_load(file) or {}
         return cls(**config_data)
 

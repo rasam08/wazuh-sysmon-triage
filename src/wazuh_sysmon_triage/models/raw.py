@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, TypedDict
+from typing import Any, TypedDict
 
 
 class WazuhAgent(TypedDict, total=False):
@@ -13,7 +13,7 @@ class WazuhRule(TypedDict, total=False):
     id: str | int
     level: int
     description: str
-    groups: List[str]
+    groups: list[str]
 
 
 class WinSystem(TypedDict, total=False):
@@ -61,4 +61,4 @@ class RawHit(TypedDict, total=False):
     _id: str
     _index: str
     _score: float
-    fields: Dict[str, Any]
+    fields: dict[str, Any]

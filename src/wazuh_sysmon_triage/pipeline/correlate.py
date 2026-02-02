@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import ipaddress
 import os
-from importlib import resources
-import yaml
 from collections import defaultdict
-from datetime import datetime, timezone
-from typing import Iterable, List
+from collections.abc import Iterable
+from datetime import UTC, datetime
+from importlib import resources
+
+import yaml
 
 from wazuh_sysmon_triage.models.findings import Artifact, IncidentSummary, ProcessEdge, ProcessNode
 from wazuh_sysmon_triage.models.sysmon import (
@@ -15,7 +16,6 @@ from wazuh_sysmon_triage.models.sysmon import (
     ProcessCreateEvent,
     SysmonEvent,
 )
-
 
 SCRIPT_INTERPRETERS = {
     "powershell.exe",
@@ -38,7 +38,11 @@ COMMON_PORTS = {80, 443, 53, 123, 445, 3389, 22, 25}
 
 
 def _load_sigma_rules() -> list[dict]:
-    with resources.files("wazuh_sysmon_triage.data").joinpath("sigma_rules.yaml").open("r", encoding="utf-8") as handle:
+    with (
+        resources.files("wazuh_sysmon_triage.data")
+        .joinpath("sigma_rules.yaml")
+        .open("r", encoding="utf-8") as handle
+    ):
         data = yaml.safe_load(handle) or {}
     rules = []
     for name, rule in data.items():
@@ -53,7 +57,10 @@ def _match_sigma(rule: dict, image: str | None, command_line: str | None) -> boo
         if _basename(image) != str(match["image"]).lower():
             return False
     if "commandline_contains" in match:
-        if not command_line or str(match["commandline_contains"]).lower() not in command_line.lower():
+        if (
+            not command_line
+            or str(match["commandline_contains"]).lower() not in command_line.lower()
+        ):
             return False
     return True
 
@@ -105,14 +112,14 @@ def correlate_data(events: Iterable[SysmonEvent]) -> dict:
     """
     event_list = list(events)
     nodes_by_guid: dict[str, ProcessNode] = {}
-    edges: List[ProcessEdge] = []
-    artifacts: List[Artifact] = []
-    network_activity: List[dict] = []
-    out_degree = defaultdict(int)
-    artifact_links = defaultdict(int)
+    edges: list[ProcessEdge] = []
+    artifacts: list[Artifact] = []
+    network_activity: list[dict] = []
+    out_degree: defaultdict[str, int] = defaultdict(int)
+    artifact_links: defaultdict[str, int] = defaultdict(int)
     first_ts: datetime | None = None
     last_ts: datetime | None = None
-    narrative: List[str] = []
+    narrative: list[str] = []
     sigma_rules = _load_sigma_rules()
 
     for event in event_list:
@@ -198,9 +205,7 @@ def correlate_data(events: Iterable[SysmonEvent]) -> dict:
             )
 
             if _is_script_write(event.target_filename):
-                narrative.append(
-                    f"Suspicious script write: {event.target_filename}"
-                )
+                narrative.append(f"Suspicious script write: {event.target_filename}")
 
         if isinstance(event, NetworkConnectEvent):
             guid = event.process_guid
@@ -224,7 +229,7 @@ def correlate_data(events: Iterable[SysmonEvent]) -> dict:
                     node.last_seen = event.timestamp
 
             suspicious = False
-            reasons: List[str] = []
+            reasons: list[str] = []
             if _is_public_ip(event.destination_ip):
                 suspicious = True
                 reasons.append("public_ip")
@@ -253,9 +258,10 @@ def correlate_data(events: Iterable[SysmonEvent]) -> dict:
     for edge in edges:
         parent = nodes_by_guid.get(edge.parent_guid)
         child = nodes_by_guid.get(edge.child_guid)
-        if _basename(parent.image if parent else None) == "schtasks.exe" and _basename(
-            child.image if child else None
-        ) == "powershell.exe":
+        if (
+            _basename(parent.image if parent else None) == "schtasks.exe"
+            and _basename(child.image if child else None) == "powershell.exe"
+        ):
             schtasks_chain = True
             break
     if schtasks_chain:
@@ -280,8 +286,8 @@ def correlate_data(events: Iterable[SysmonEvent]) -> dict:
         time_range=(first_ts, last_ts)
         if first_ts and last_ts
         else (
-            datetime.now(tz=timezone.utc),
-            datetime.now(tz=timezone.utc),
+            datetime.now(tz=UTC),
+            datetime.now(tz=UTC),
         ),
         agent=event_list[0].agent_name if event_list else None,
         key_processes=key_processes,
@@ -297,4 +303,3 @@ def correlate_data(events: Iterable[SysmonEvent]) -> dict:
         "artifacts": artifacts,
         "network_activity": network_activity,
     }
-

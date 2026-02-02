@@ -3,17 +3,15 @@ from __future__ import annotations
 import json
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 class JsonLineFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
-        payload: Dict[str, Any] = {
-            "ts": datetime.fromtimestamp(record.created, tz=timezone.utc)
-            .isoformat()
-            .replace("+00:00", "Z"),
+        payload: dict[str, Any] = {
+            "ts": datetime.fromtimestamp(record.created, tz=UTC).isoformat().replace("+00:00", "Z"),
             "level": record.levelname,
             "logger": record.name,
             "event": getattr(record, "event", None),
@@ -33,8 +31,8 @@ class JsonLineFormatter(logging.Formatter):
         return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
 
 
-def _redact_sensitive(data: Dict[str, Any]) -> Dict[str, Any]:
-    redacted: Dict[str, Any] = {}
+def _redact_sensitive(data: dict[str, Any]) -> dict[str, Any]:
+    redacted: dict[str, Any] = {}
     for key, value in data.items():
         if key.lower() in {"authorization", "password", "pass"}:
             redacted[key] = "[REDACTED]"
@@ -51,7 +49,7 @@ def _redact_sensitive(data: Dict[str, Any]) -> Dict[str, Any]:
     return redacted
 
 
-def setup_logging(level: str = "INFO", json: bool = True, out_path: Optional[Path] = None) -> None:
+def setup_logging(level: str = "INFO", json: bool = True, out_path: Path | None = None) -> None:
     """
     Set up structured NDJSON logging.
 

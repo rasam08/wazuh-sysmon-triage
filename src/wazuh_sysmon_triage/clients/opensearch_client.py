@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 import httpx
-
 
 LOGGER = logging.getLogger(__name__)
 
 
 RETRY_STATUS_CODES = {429, 502, 503}
 DEFAULT_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
+
 
 class OpenSearchClient:
     """A client for interacting with an OpenSearch server."""
@@ -54,10 +54,10 @@ class OpenSearchClient:
         self,
         method: str,
         path: str,
-        json_body: Optional[Dict[str, Any]] = None,
-        run_id: Optional[str] = None,
-        case_id: Optional[str] = None,
-    ) -> tuple[Dict[str, Any], Optional[str]]:
+        json_body: dict[str, Any] | None = None,
+        run_id: str | None = None,
+        case_id: str | None = None,
+    ) -> tuple[dict[str, Any], str | None]:
         attempt = 0
         while True:
             attempt += 1
@@ -91,8 +91,8 @@ class OpenSearchClient:
         self,
         index_pattern: str,
         keep_alive: str = "1m",
-        run_id: Optional[str] = None,
-        case_id: Optional[str] = None,
+        run_id: str | None = None,
+        case_id: str | None = None,
     ) -> str:
         response, request_id = self._request(
             "POST",
@@ -112,11 +112,11 @@ class OpenSearchClient:
     def search(
         self,
         pit_id: str,
-        query_body: Dict[str, Any],
-        search_after: Optional[list] = None,
-        run_id: Optional[str] = None,
-        case_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        query_body: dict[str, Any],
+        search_after: list | None = None,
+        run_id: str | None = None,
+        case_id: str | None = None,
+    ) -> dict[str, Any]:
         body = dict(query_body)
         body["pit"] = {"id": pit_id, "keep_alive": "1m"}
         if search_after:
@@ -141,7 +141,9 @@ class OpenSearchClient:
         )
         return response
 
-    def delete_pit(self, pit_id: str, run_id: Optional[str] = None, case_id: Optional[str] = None) -> None:
+    def delete_pit(
+        self, pit_id: str, run_id: str | None = None, case_id: str | None = None
+    ) -> None:
         _, request_id = self._request(
             "DELETE",
             "/_pit",
@@ -157,5 +159,6 @@ class OpenSearchClient:
     def close(self) -> None:
         """Closes the HTTP client."""
         self.client.close()
+
 
 # TODO: Implement additional methods for other OpenSearch operations as needed.

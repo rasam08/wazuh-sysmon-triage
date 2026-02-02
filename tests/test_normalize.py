@@ -1,8 +1,12 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
-from wazuh_sysmon_triage.models.sysmon import FileCreateEvent, NetworkConnectEvent, ProcessCreateEvent
+from wazuh_sysmon_triage.models.sysmon import (
+    FileCreateEvent,
+    NetworkConnectEvent,
+    ProcessCreateEvent,
+)
 from wazuh_sysmon_triage.pipeline.normalize import normalize_data
 
 
@@ -101,10 +105,10 @@ def test_normalize_data(eid1_hit: dict, eid11_hit: dict, eid3_hit: dict) -> None
     assert results[0].process_id == 4242
     assert results[0].agent_id == "010"
     assert results[0].mitre_techniques == ["T1059"]
-    assert results[0].timestamp == datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    assert results[0].timestamp == datetime(2024, 1, 1, 0, 0, 0, tzinfo=UTC)
 
     assert results[1].destination_ip == "8.8.8.8"
     assert results[1].destination_port == 443
 
     assert results[2].target_filename == "C:\\Temp\\test.txt"
-    assert results[2].creation_utc_time == datetime(2024, 1, 1, 0, 9, 58, tzinfo=timezone.utc)
+    assert results[2].creation_utc_time == datetime(2024, 1, 1, 0, 9, 58, tzinfo=UTC)

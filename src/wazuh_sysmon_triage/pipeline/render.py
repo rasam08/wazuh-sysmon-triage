@@ -3,8 +3,9 @@ from __future__ import annotations
 import csv
 import json
 import os
-from datetime import datetime, timezone
-from typing import Any, Iterable, Sequence
+from collections.abc import Iterable, Sequence
+from datetime import UTC, datetime
+from typing import Any
 
 from wazuh_sysmon_triage.models.findings import Artifact, IncidentSummary, ProcessEdge, ProcessNode
 from wazuh_sysmon_triage.models.sysmon import SysmonEvent
@@ -18,8 +19,8 @@ def _iso_z(value: datetime | None) -> str:
     if not value:
         return ""
     if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    value = value.astimezone(timezone.utc)
+        value = value.replace(tzinfo=UTC)
+    value = value.astimezone(UTC)
     return value.isoformat().replace("+00:00", "Z")
 
 
@@ -152,10 +153,12 @@ def render_report(data: dict, output_dir: str) -> None:
 
     node_by_guid = {node.guid: node for node in nodes_list}
     artifacts_by_creator = {
-        artifact.creating_process_guid for artifact in artifacts_list if artifact.creating_process_guid
+        artifact.creating_process_guid
+        for artifact in artifacts_list
+        if artifact.creating_process_guid
     }
 
-    chains = []
+    chain_scores: list[tuple[int, str]] = []
     for edge in edges_list:
         parent = node_by_guid.get(edge.parent_guid)
         child = node_by_guid.get(edge.child_guid)
@@ -163,13 +166,29 @@ def render_report(data: dict, output_dir: str) -> None:
             score = 0
             if parent.guid in artifacts_by_creator or child.guid in artifacts_by_creator:
                 score += 2
-            if os.path.basename(parent.image).lower() in {"powershell.exe", "pwsh.exe", "cscript.exe", "wscript.exe", "python.exe"}:
+            if os.path.basename(parent.image).lower() in {
+                "powershell.exe",
+                "pwsh.exe",
+                "cscript.exe",
+                "wscript.exe",
+                "python.exe",
+            }:
                 score += 1
-            if os.path.basename(child.image).lower() in {"powershell.exe", "pwsh.exe", "cscript.exe", "wscript.exe", "python.exe"}:
+            if os.path.basename(child.image).lower() in {
+                "powershell.exe",
+                "pwsh.exe",
+                "cscript.exe",
+                "wscript.exe",
+                "python.exe",
+            }:
                 score += 1
-            chains.append((score, f"{os.path.basename(parent.image)} -> {os.path.basename(child.image)}"))
+            chain_scores.append(
+                (score, f"{os.path.basename(parent.image)} -> {os.path.basename(child.image)}")
+            )
 
-    chains = [chain for _, chain in sorted(chains, key=lambda item: item[0], reverse=True)][:3]
+    chains = [chain for _, chain in sorted(chain_scores, key=lambda item: item[0], reverse=True)][
+        :3
+    ]
 
     artifacts_rows = [
         "| Path | Created At | Creator Image | Confidence |",
@@ -195,9 +214,7 @@ def render_report(data: dict, output_dir: str) -> None:
         if case_id:
             handle.write(f"**Case ID:** {case_id}\n")
         handle.write("\n")
-        handle.write(
-            f"**Timeframe:** {_iso_z(time_range[0])} → {_iso_z(time_range[1])}\n\n"
-        )
+        handle.write(f"**Timeframe:** {_iso_z(time_range[0])} → {_iso_z(time_range[1])}\n\n")
         handle.write("**Query Parameters:**\n")
         handle.write("\n".join(query_lines) + "\n\n")
 

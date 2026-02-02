@@ -5,7 +5,7 @@ import logging
 import os
 from pathlib import Path
 from time import perf_counter
-from typing import Optional
+from typing import TypedDict
 
 import typer
 
@@ -23,6 +23,12 @@ from wazuh_sysmon_triage.pipeline.render import (
 )
 from wazuh_sysmon_triage.runtime import RunContext, timed
 
+
+class TruncationInfo(TypedDict):
+    truncated: bool
+    reason: str | None
+
+
 app = typer.Typer(help="SOC triage CLI for Wazuh Sysmon data.")
 
 
@@ -36,30 +42,32 @@ def _write_run_metadata(out_dir: str, payload: dict) -> None:
         json.dump(payload, handle, indent=2)
 
 
-def _validate_required(start: Optional[str], end: Optional[str], agent_id: Optional[str], agent_name: Optional[str]) -> None:
+def _validate_required(
+    start: str | None, end: str | None, agent_id: str | None, agent_name: str | None
+) -> None:
     if not start or not end:
         raise typer.BadParameter("--start and --end are required")
     if not agent_id and not agent_name:
         raise typer.BadParameter("--agent-id or --agent-name is required")
 
 
-def _validate_opensearch(host: Optional[str], user: Optional[str], password: Optional[str]) -> None:
+def _validate_opensearch(host: str | None, user: str | None, password: str | None) -> None:
     if not host or not user or not password:
         raise typer.BadParameter("--host, --user, and --password are required")
 
 
 def _resolve_config(
-    config_path: Optional[str],
-    start: Optional[str],
-    end: Optional[str],
-    agent_id: Optional[str],
-    agent_name: Optional[str],
-    out_dir: Optional[str],
-    host: Optional[str],
-    user: Optional[str],
-    password: Optional[str],
-    verify_tls: Optional[bool],
-    index_pattern: Optional[str],
+    config_path: str | None,
+    start: str | None,
+    end: str | None,
+    agent_id: str | None,
+    agent_name: str | None,
+    out_dir: str | None,
+    host: str | None,
+    user: str | None,
+    password: str | None,
+    verify_tls: bool | None,
+    index_pattern: str | None,
 ) -> dict:
     cfg = {}
     if config_path:
@@ -83,25 +91,25 @@ def _resolve_config(
 
 @app.command("fetch")
 def fetch_command(
-    start: Optional[str] = typer.Option(None, help="Start time in ISO8601 format."),
-    end: Optional[str] = typer.Option(None, help="End time in ISO8601 format."),
-    agent_id: Optional[str] = typer.Option(None, help="Agent ID."),
-    agent_name: Optional[str] = typer.Option(None, help="Agent Name."),
+    start: str | None = typer.Option(None, help="Start time in ISO8601 format."),
+    end: str | None = typer.Option(None, help="End time in ISO8601 format."),
+    agent_id: str | None = typer.Option(None, help="Agent ID."),
+    agent_name: str | None = typer.Option(None, help="Agent Name."),
     out_dir: str = typer.Option("./out", help="Output directory."),
-    host: Optional[str] = typer.Option(None, help="Host for OpenSearch."),
-    user: Optional[str] = typer.Option(None, help="Username for OpenSearch."),
-    password: Optional[str] = typer.Option(None, help="Password for OpenSearch."),
+    host: str | None = typer.Option(None, help="Host for OpenSearch."),
+    user: str | None = typer.Option(None, help="Username for OpenSearch."),
+    password: str | None = typer.Option(None, help="Password for OpenSearch."),
     verify_tls: bool = typer.Option(True, help="Verify TLS certificate."),
     index_pattern: str = typer.Option("wazuh-alerts-4.x-*", help="Index pattern for OpenSearch."),
     agent_mode: str = typer.Option("any", help="Agent filter mode: any|all."),
-    raw_save: Optional[str] = typer.Option(None, help="Optional NDJSON output path for raw hits."),
+    raw_save: str | None = typer.Option(None, help="Optional NDJSON output path for raw hits."),
     log_level: str = typer.Option("INFO", help="Logging level."),
     log_json: bool = typer.Option(True, help="Emit JSON logs."),
-    log_file: Optional[str] = typer.Option(None, help="Optional log file path."),
+    log_file: str | None = typer.Option(None, help="Optional log file path."),
     max_events: int = typer.Option(20000, help="Maximum events to fetch."),
     max_pages: int = typer.Option(200, help="Maximum PIT pages to fetch."),
     fail_on_truncation: bool = typer.Option(False, help="Fail if results are truncated."),
-    config: Optional[str] = typer.Option(None, help="Path to YAML config file."),
+    config: str | None = typer.Option(None, help="Path to YAML config file."),
 ):
     run_ctx = RunContext()
     log_path = Path(log_file).resolve() if log_file else None
@@ -163,7 +171,7 @@ def fetch_command(
     )
 
     hits = []
-    truncation = {"truncated": False, "reason": None}
+    truncation: TruncationInfo = {"truncated": False, "reason": None}
     raw_handle = None
     try:
         if raw_save:
@@ -253,28 +261,28 @@ def fetch_command(
 
 @app.command("run")
 def run_command(
-    start: Optional[str] = typer.Option(None, help="Start time in ISO8601 format."),
-    end: Optional[str] = typer.Option(None, help="End time in ISO8601 format."),
-    agent_id: Optional[str] = typer.Option(None, help="Agent ID."),
-    agent_name: Optional[str] = typer.Option(None, help="Agent Name."),
+    start: str | None = typer.Option(None, help="Start time in ISO8601 format."),
+    end: str | None = typer.Option(None, help="End time in ISO8601 format."),
+    agent_id: str | None = typer.Option(None, help="Agent ID."),
+    agent_name: str | None = typer.Option(None, help="Agent Name."),
     out_dir: str = typer.Option("./out", help="Output directory."),
-    host: Optional[str] = typer.Option(None, help="Host for OpenSearch."),
-    user: Optional[str] = typer.Option(None, help="Username for OpenSearch."),
-    password: Optional[str] = typer.Option(None, help="Password for OpenSearch."),
+    host: str | None = typer.Option(None, help="Host for OpenSearch."),
+    user: str | None = typer.Option(None, help="Username for OpenSearch."),
+    password: str | None = typer.Option(None, help="Password for OpenSearch."),
     verify_tls: bool = typer.Option(True, help="Verify TLS certificate."),
     index_pattern: str = typer.Option("wazuh-alerts-4.x-*", help="Index pattern for OpenSearch."),
     agent_mode: str = typer.Option("any", help="Agent filter mode: any|all."),
-    raw_save: Optional[str] = typer.Option(None, help="Optional NDJSON output path for raw hits."),
+    raw_save: str | None = typer.Option(None, help="Optional NDJSON output path for raw hits."),
     log_level: str = typer.Option("INFO", help="Logging level."),
     log_json: bool = typer.Option(True, help="Emit JSON logs."),
-    log_file: Optional[str] = typer.Option(None, help="Optional log file path."),
+    log_file: str | None = typer.Option(None, help="Optional log file path."),
     max_events: int = typer.Option(20000, help="Maximum events to fetch."),
     max_pages: int = typer.Option(200, help="Maximum PIT pages to fetch."),
     fail_on_truncation: bool = typer.Option(False, help="Fail if results are truncated."),
     print_stats: bool = typer.Option(False, help="Print a summary table after the run."),
-    case_id: Optional[str] = typer.Option(None, help="Optional case ID for case bundle output."),
-    input_ndjson: Optional[str] = typer.Option(None, help="Run offline from NDJSON hits."),
-    config: Optional[str] = typer.Option(None, help="Path to YAML config file."),
+    case_id: str | None = typer.Option(None, help="Optional case ID for case bundle output."),
+    input_ndjson: str | None = typer.Option(None, help="Run offline from NDJSON hits."),
+    config: str | None = typer.Option(None, help="Path to YAML config file."),
 ):
     run_ctx = RunContext(case_id=case_id)
     setup_logging(log_level, json=log_json, out_path=None)
@@ -328,7 +336,7 @@ def run_command(
 
     logger = logging.getLogger("wazuh_sysmon_triage")
     hits = []
-    truncation = {"truncated": False, "reason": None}
+    truncation: TruncationInfo = {"truncated": False, "reason": None}
     raw_handle = None
     fetch_duration_ms = 0
     try:
@@ -343,7 +351,7 @@ def run_command(
                         "case_id": run_ctx.case_id,
                     },
                 )
-                with open(input_ndjson, "r", encoding="utf-8") as handle:
+                with open(input_ndjson, encoding="utf-8") as handle:
                     for line in handle:
                         text = line.strip()
                         if not text:
@@ -563,9 +571,9 @@ def run_command(
     )
 
     if print_stats:
-        normalized_summary = ", ".join(
-            f"{eid}: {count}" for eid, count in sorted(counts_by_eid.items())
-        ) or "none"
+        normalized_summary = (
+            ", ".join(f"{eid}: {count}" for eid, count in sorted(counts_by_eid.items())) or "none"
+        )
         suspicious_destinations = sum(
             1 for entry in correlation.get("network_activity", []) if entry.get("suspicious")
         )
