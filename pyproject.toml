@@ -2,7 +2,8 @@
 name = "wazuh-sysmon-triage"
 version = "1.0.0"
 description = "A CLI tool for triaging Sysmon data in Wazuh."
-authors = ["rasam <rasam@users.noreply.github.com>"]
+authors = ["Rasam Moghaddam"]
+homepage = "https://github.com/rasam08"
 license = "MIT"
 readme = "README.md"
 keywords = ["wazuh", "sysmon", "cli", "triage"]
@@ -10,6 +11,9 @@ keywords = ["wazuh", "sysmon", "cli", "triage"]
 packages = [
 	{ include = "wazuh_sysmon_triage", from = "src" }
 ]
+
+[tool.poetry.scripts]
+wazuh-sysmon-triage = "wazuh_sysmon_triage.__main__:main"
 
 [tool.poetry.dependencies]
 python = ">=3.12"

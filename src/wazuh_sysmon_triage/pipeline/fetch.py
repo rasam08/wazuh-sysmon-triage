@@ -140,12 +140,20 @@ def fetch_sysmon_events(
         agent_mode=agent_mode,
     )
 
-    pit_id = client.create_pit(index_pattern, run_id=run_id, case_id=case_id)
     search_after: list[Any] | None = None
     hits: list[RawHit] = []
     truncated = False
     reason: str | None = None
     pages = 0
+
+    pit_id: str | None = None
+    try:
+        pit_id = client.create_pit(index_pattern, run_id=run_id, case_id=case_id)
+    except ValueError as exc:
+        # Fallback for deployments without PIT support.
+        if "PIT API not supported" not in str(exc):
+            raise
+
     try:
         while True:
             if pages >= max_pages:
@@ -153,13 +161,27 @@ def fetch_sysmon_events(
                 reason = "max-pages"
                 break
             pages += 1
-            response = client.search(
-                pit_id,
-                query_body,
-                search_after=search_after,
-                run_id=run_id,
-                case_id=case_id,
-            )
+
+            if pit_id:
+                response = client.search(
+                    pit_id,
+                    query_body,
+                    search_after=search_after,
+                    run_id=run_id,
+                    case_id=case_id,
+                )
+            else:
+                # Without PIT, use a stable, general-purpose tie-breaker.
+                query_no_pit = dict(query_body)
+                query_no_pit["sort"] = [{"@timestamp": "asc"}, {"_id": "asc"}]
+                response = client.search_index(
+                    index_pattern,
+                    query_no_pit,
+                    search_after=search_after,
+                    run_id=run_id,
+                    case_id=case_id,
+                )
+
             page_hits: list[RawHit] = response.get("hits", {}).get("hits", [])
             if not page_hits:
                 break
@@ -176,7 +198,8 @@ def fetch_sysmon_events(
                 break
             search_after = last_sort
     finally:
-        client.delete_pit(pit_id, run_id=run_id, case_id=case_id)
+        if pit_id:
+            client.delete_pit(pit_id, run_id=run_id, case_id=case_id)
 
     return FetchResult(
         hits=hits,

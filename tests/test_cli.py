@@ -28,7 +28,7 @@ def test_fetch_requires_agent() -> None:
             "--user",
             "admin",
             "--password",
-            "secret",
+            "dummy-password",
         ],
     )
     assert result.exit_code == 2
@@ -48,7 +48,7 @@ def test_run_requires_agent() -> None:
             "--user",
             "admin",
             "--password",
-            "secret",
+            "dummy-password",
         ],
     )
     assert result.exit_code == 2
@@ -64,8 +64,13 @@ def test_run_requires_opensearch_creds() -> None:
             "--end",
             "2024-01-01T01:00:00Z",
             "--agent-id",
-            "010",
+            "999",
         ],
+        env={
+            "WAZUH_OS_HOST": "",
+            "WAZUH_OS_USER": "",
+            "WAZUH_OS_PASSWORD": "",
+        },
     )
     assert result.exit_code == 2
 
@@ -93,14 +98,20 @@ def test_run_case_id_outputs(tmp_path, monkeypatch) -> None:
             "2024-01-01T00:00:00Z",
             "--end",
             "2024-01-01T01:00:00Z",
+            "--event-id",
+            "1",
+            "--event-id",
+            "3",
+            "--event-id",
+            "11",
             "--agent-id",
-            "010",
+            "999",
             "--host",
             "https://example:9200",
             "--user",
             "admin",
             "--password",
-            "secret",
+            "dummy-password",
             "--out-dir",
             str(out_dir),
             "--case-id",
@@ -116,6 +127,10 @@ def test_run_case_id_outputs(tmp_path, monkeypatch) -> None:
     assert (case_dir / "report.md").exists()
     assert (case_dir / "query.json").exists()
     assert (case_dir / "stats.json").exists()
+
+    query = json.loads((case_dir / "query.json").read_text(encoding="utf-8"))
+    eid_should = query["query"]["bool"]["filter"][2]["bool"]["should"]
+    assert {"terms": {"data.win.system.eventID": [1, 3, 11]}} in eid_should
 
     report_text = (case_dir / "report.md").read_text(encoding="utf-8")
     assert "Case ID" in report_text
@@ -187,7 +202,7 @@ def test_run_offline_truncation(tmp_path) -> None:
                 {
                     "_source": {
                         "@timestamp": "2024-01-01T00:00:00Z",
-                        "agent": {"id": "010", "name": "anon"},
+                            "agent": {"id": "999", "name": "agent-test"},
                         "rule": {"id": "92203", "description": "Sysmon Process Create"},
                         "data": {
                             "win": {
@@ -235,7 +250,7 @@ def test_run_offline_truncation_fails(tmp_path) -> None:
                 {
                     "_source": {
                         "@timestamp": "2024-01-01T00:00:00Z",
-                        "agent": {"id": "010", "name": "anon"},
+                            "agent": {"id": "999", "name": "agent-test"},
                         "rule": {"id": "92203", "description": "Sysmon Process Create"},
                         "data": {
                             "win": {

@@ -13,8 +13,8 @@ def _build_events():
     parent = ProcessCreateEvent(
         event_id=1,
         timestamp=datetime(2024, 1, 1, 0, 0, 0, tzinfo=UTC),
-        agent_id="010",
-        agent_name="anon",
+        agent_id="999",
+        agent_name="agent-test",
         rule_id="92203",
         process_guid="{PARENT}",
         process_id=100,
@@ -25,8 +25,8 @@ def _build_events():
     child = ProcessCreateEvent(
         event_id=1,
         timestamp=datetime(2024, 1, 1, 0, 1, 0, tzinfo=UTC),
-        agent_id="010",
-        agent_name="anon",
+        agent_id="999",
+        agent_name="agent-test",
         rule_id="92204",
         process_guid="{CHILD}",
         process_id=200,
@@ -40,8 +40,8 @@ def _build_events():
     file_event = FileCreateEvent(
         event_id=11,
         timestamp=datetime(2024, 1, 1, 0, 2, 0, tzinfo=UTC),
-        agent_id="010",
-        agent_name="anon",
+        agent_id="999",
+        agent_name="agent-test",
         rule_id="92205",
         process_guid="{CHILD}",
         process_id=200,
@@ -63,7 +63,7 @@ def test_render_outputs(tmp_path) -> None:
         {
             **correlate_result,
             "events": events,
-            "query": {"agent_id": "010", "start": "2024-01-01T00:00:00Z"},
+            "query": {"agent_id": "999", "start": "2024-01-01T00:00:00Z"},
         },
         str(tmp_path),
     )

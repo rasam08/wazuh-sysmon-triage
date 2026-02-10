@@ -9,20 +9,26 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 class Config(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    start: str = Field(..., description="Start time in ISO8601 format")
-    end: str = Field(..., description="End time in ISO8601 format")
+    # These can be provided via CLI flags; keep optional so connection-only config files work.
+    start: str | None = Field(None, description="Start time in ISO8601 format")
+    end: str | None = Field(None, description="End time in ISO8601 format")
     agent_id: str | None = Field(None, description="Agent ID")
     agent_name: str | None = Field(None, description="Agent Name")
-    out_dir: str = Field(..., description="Output directory")
+    out_dir: str = Field("./out", description="Output directory")
     host: str | None = Field(None, description="Host for OpenSearch")
     user: str | None = Field(None, description="Username for OpenSearch")
     password: str | None = Field(None, alias="pass", description="Password for OpenSearch")
     verify_tls: bool = Field(True, description="Verify TLS certificate")
     index_pattern: str = Field("wazuh-alerts-4.x-*", description="Index pattern for OpenSearch")
+    event_ids: list[int] | None = Field(
+        None, description="Sysmon event IDs to include (e.g. [1, 3, 11]). If omitted, defaults apply."
+    )
 
     @field_validator("start", "end")
     @classmethod
-    def _validate_iso8601(cls, value: str) -> str:
+    def _validate_iso8601(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
         text = value.strip()
         if text.endswith("Z"):
             text = text[:-1] + "+00:00"
@@ -43,5 +49,5 @@ def load_config(file_path: str) -> Config:
 
 def validate_config(config: Config) -> None:
     """Validate the loaded configuration."""
-    if config.start >= config.end:
+    if config.start and config.end and config.start >= config.end:
         raise ValueError("start must be before end")

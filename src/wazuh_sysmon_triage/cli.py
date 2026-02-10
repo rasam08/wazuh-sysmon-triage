@@ -68,6 +68,7 @@ def _resolve_config(
     password: str | None,
     verify_tls: bool | None,
     index_pattern: str | None,
+    event_ids: list[int] | None,
 ) -> dict:
     cfg = {}
     if config_path:
@@ -85,6 +86,7 @@ def _resolve_config(
         "password": password or os.getenv("WAZUH_OS_PASSWORD") or cfg.get("password"),
         "verify_tls": verify_tls if verify_tls is not None else cfg.get("verify_tls"),
         "index_pattern": index_pattern or cfg.get("index_pattern"),
+        "event_ids": event_ids or cfg.get("event_ids"),
     }
     return resolved
 
@@ -101,6 +103,11 @@ def fetch_command(
     password: str | None = typer.Option(None, help="Password for OpenSearch."),
     verify_tls: bool = typer.Option(True, help="Verify TLS certificate."),
     index_pattern: str = typer.Option("wazuh-alerts-4.x-*", help="Index pattern for OpenSearch."),
+    event_id: list[int] | None = typer.Option(
+        None,
+        "--event-id",
+        help="Sysmon event ID(s) to include. Repeatable (e.g. --event-id 1 --event-id 3 --event-id 11).",
+    ),
     agent_mode: str = typer.Option("any", help="Agent filter mode: any|all."),
     raw_save: str | None = typer.Option(None, help="Optional NDJSON output path for raw hits."),
     log_level: str = typer.Option("INFO", help="Logging level."),
@@ -127,6 +134,7 @@ def fetch_command(
         password,
         verify_tls,
         index_pattern,
+        event_id,
     )
     start = resolved["start"]
     end = resolved["end"]
@@ -138,6 +146,7 @@ def fetch_command(
     password = resolved["password"]
     verify_tls = bool(resolved["verify_tls"]) if resolved["verify_tls"] is not None else True
     index_pattern = resolved["index_pattern"] or "wazuh-alerts-4.x-*"
+    event_ids = resolved.get("event_ids")
 
     _validate_required(start, end, agent_id, agent_name)
     _validate_opensearch(host, user, password)
@@ -149,6 +158,7 @@ def fetch_command(
         agent_id=agent_id,
         agent_name=agent_name,
         agent_mode=agent_mode,
+        event_ids=event_ids,
     )
 
     logger = logging.getLogger("wazuh_sysmon_triage")
@@ -186,6 +196,7 @@ def fetch_command(
             end_dt=end,
             agent_id=agent_id,
             agent_name=agent_name,
+            event_ids=tuple(event_ids) if event_ids else (1, 11),
             agent_mode=agent_mode,
             run_id=run_ctx.run_id,
             case_id=run_ctx.case_id,
@@ -271,6 +282,11 @@ def run_command(
     password: str | None = typer.Option(None, help="Password for OpenSearch."),
     verify_tls: bool = typer.Option(True, help="Verify TLS certificate."),
     index_pattern: str = typer.Option("wazuh-alerts-4.x-*", help="Index pattern for OpenSearch."),
+    event_id: list[int] | None = typer.Option(
+        None,
+        "--event-id",
+        help="Sysmon event ID(s) to include. Repeatable (e.g. --event-id 1 --event-id 3 --event-id 11).",
+    ),
     agent_mode: str = typer.Option("any", help="Agent filter mode: any|all."),
     raw_save: str | None = typer.Option(None, help="Optional NDJSON output path for raw hits."),
     log_level: str = typer.Option("INFO", help="Logging level."),
@@ -298,6 +314,7 @@ def run_command(
         password,
         verify_tls,
         index_pattern,
+        event_id,
     )
     start = resolved["start"]
     end = resolved["end"]
@@ -309,6 +326,7 @@ def run_command(
     password = resolved["password"]
     verify_tls = bool(resolved["verify_tls"]) if resolved["verify_tls"] is not None else True
     index_pattern = resolved["index_pattern"] or "wazuh-alerts-4.x-*"
+    event_ids = resolved.get("event_ids")
 
     if not input_ndjson:
         _validate_required(start, end, agent_id, agent_name)
@@ -332,6 +350,7 @@ def run_command(
             agent_id=agent_id,
             agent_name=agent_name,
             agent_mode=agent_mode,
+            event_ids=event_ids,
         )
 
     logger = logging.getLogger("wazuh_sysmon_triage")
@@ -398,6 +417,7 @@ def run_command(
                     end_dt=end,
                     agent_id=agent_id,
                     agent_name=agent_name,
+                    event_ids=tuple(event_ids) if event_ids else (1, 11),
                     agent_mode=agent_mode,
                     run_id=run_ctx.run_id,
                     case_id=run_ctx.case_id,

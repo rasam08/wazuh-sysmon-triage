@@ -15,7 +15,7 @@ def eid1_hit() -> dict:
     return {
         "_source": {
             "@timestamp": "2024-01-01T00:00:01Z",
-            "agent": {"id": "010", "name": "anon", "ip": "10.0.0.5"},
+            "agent": {"id": "999", "name": "agent-test", "ip": "192.0.2.5"},
             "rule": {"id": "100001", "description": "Sysmon Process Create", "mitre": ["T1059"]},
             "data": {
                 "win": {
@@ -51,7 +51,7 @@ def eid11_hit() -> dict:
     return {
         "_source": {
             "@timestamp": "2024-01-01T00:10:00Z",
-            "agent": {"id": "010", "name": "anon"},
+            "agent": {"id": "999", "name": "agent-test"},
             "rule": {"id": "100002", "description": "Sysmon File Create"},
             "data": {
                 "win": {
@@ -76,7 +76,7 @@ def eid3_hit() -> dict:
     return {
         "_source": {
             "@timestamp": "2024-01-01T00:05:00Z",
-            "agent": {"id": "010", "name": "anon"},
+            "agent": {"id": "999", "name": "agent-test"},
             "rule": {"id": "92206", "description": "Sysmon Network Connect"},
             "data": {
                 "win": {
@@ -103,7 +103,7 @@ def test_normalize_data(eid1_hit: dict, eid11_hit: dict, eid3_hit: dict) -> None
     assert isinstance(results[2], FileCreateEvent)
 
     assert results[0].process_id == 4242
-    assert results[0].agent_id == "010"
+    assert results[0].agent_id == "999"
     assert results[0].mitre_techniques == ["T1059"]
     assert results[0].timestamp == datetime(2024, 1, 1, 0, 0, 0, tzinfo=UTC)
 

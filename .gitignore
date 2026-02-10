@@ -31,3 +31,7 @@ htmlcov/
 out/
 output/
 out_*/
+
+# Local config (may contain credentials)
+config.local.yaml
+config.local.yml

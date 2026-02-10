@@ -1,156 +1,134 @@
 # wazuh-sysmon-triage
 
-SOC/IR portfolio tool for triaging Sysmon Event ID 1 and 11 alerts collected by Wazuh and stored in OpenSearch. It fetches raw alerts, normalizes fields into a strict schema, correlates processes and artifacts, and produces deterministic outputs for timelines, graphs, and analyst-friendly reports.
+Deterministic SOC/IR triage CLI for Windows Sysmon telemetry collected by Wazuh and stored in OpenSearch.
+It normalizes noisy SIEM alerts into strict schemas, correlates execution + network + file activity, and produces a reusable “case bundle” for incident documentation.
 
-## What it does
+## Supported data
 
-- Triage Sysmon EID 1 (process create) and EID 11 (file create)
-- Normalize Wazuh/OpenSearch alerts into a stable model
-- Build explainable process graphs and artifact lists
-- Produce portable outputs: timeline CSV, process graph JSON, and a SOC-style report
-- Run online (OpenSearch) or offline (NDJSON sample)
+- Sysmon Event ID 1: Process Create
+- Sysmon Event ID 3: Network Connect
+- Sysmon Event ID 11: File Create
 
-## Architecture
+## Inputs and modes
 
-```
-OpenSearch/Wazuh
-    |
-    v
-Fetch (PIT + search_after)
-    |
-    v
-Normalize (strict schema)
-    |
-    v
-Correlate (process graph + artifacts)
-    |
-    v
-Render (timeline.csv, process_tree.json, report.md)
-```
+- Online: query OpenSearch (Wazuh Indexer API)
+- Offline: replay an NDJSON export (for demos and reproducible reviews)
 
-## Quickstart
+## Outputs (case bundle)
 
-### Install
+Each run writes a deterministic bundle to `out/<case-id>/` (or your chosen output directory):
 
-Using pipx:
+- `timeline.csv` — flattened, analyst-friendly timeline
+- `process_tree.json` — correlated process graph + artifacts + network edges
+- `report.md` — SOC-style report written from the correlated model
 
-```
-pipx install .
+The bundle also includes run metadata for auditability (e.g., `query.json`, `stats.json`, `run_metadata.json`, and a run log).
+
+## Quickstart (offline, no lab required)
+
+Requirements: Python 3.12+.
+
+Install:
+
+```powershell
+python -m venv .venv
+\.\.venv\Scripts\python.exe -m pip install -U pip
+\.\.venv\Scripts\python.exe -m pip install .
 ```
 
-Using pip:
+Run against the included sample NDJSON:
 
-```
-pip install .
+```powershell
+\.\.venv\Scripts\python.exe -m wazuh_sysmon_triage run --case-id INCIDENT-001 --input-ndjson samples/incident_001/raw_hits.ndjson --out-dir ./out --print-stats
 ```
 
-### Offline demo (NDJSON sample)
+Note: when querying OpenSearch (online mode), the fetch stage defaults to Sysmon Event IDs 1 and 11 unless you explicitly include others via `--event-id` (repeatable) or `event_ids` in a config file.
 
-```
+## Online run (OpenSearch / Wazuh Indexer)
+
+Important: Wazuh commonly exposes:
+
+- Dashboards/UI on `:443`
+- Indexer API (OpenSearch HTTP) on `:9920`
+
+This tool must talk to the Indexer API.
+
+Example (PowerShell):
+
+```powershell
+$env:WAZUH_OS_HOST = "https://indexer:9920"
+$env:WAZUH_OS_USER = "admin"
+$env:WAZUH_OS_PASSWORD = "<password>"
+
 python -m wazuh_sysmon_triage run \
-  --input-ndjson samples/incident_001/raw_hits.ndjson \
-  --out-dir ./out
-```
-
-### Useful flags
-
-- Guardrails: `--max-events`, `--max-pages`, `--fail-on-truncation`
-- Timing + summary: `--print-stats` (prints counts + total duration)
-
-### Golden demo (case bundle)
-
-One command that generates a complete case bundle (including `query.json`, `stats.json`, `run_metadata.json`):
-
-```
-python -m wazuh_sysmon_triage run \
-  --case-id INCIDENT-001 \
-  --input-ndjson samples/incident_001/raw_hits.ndjson \
+  --case-id INCIDENT-ONLINE-001 \
+  --index-pattern "wazuh-alerts-4.x-*" \
+  --agent-name "anon" \
+  --start "2026-02-10T00:00:00Z" \
+  --end   "2026-02-10T02:00:00Z" \
+  --event-id 1 --event-id 3 --event-id 11 \
   --out-dir ./out \
   --print-stats
 ```
 
-### OpenSearch run (Wazuh indexer)
+TLS note: to disable certificate verification (common in labs), pass `--no-verify-tls`.
 
-Example config (config.example.yaml):
+### SSH tunnel (common lab topology)
 
-```
-start: "2024-01-01T00:00:00Z"
-end: "2024-01-01T01:00:00Z"
-agent_id: "010"
-out_dir: "./out"
-host: "https://indexer:9200"
-user: "admin"
-pass: "password"
-verify_tls: true
-index_pattern: "wazuh-alerts-4.x-*"
+If `:9920` is only reachable from the server itself, forward it over SSH:
+
+```powershell
+ssh -N -L 9920:localhost:9920 <user>@<wazuh-server>
 ```
 
-Command:
+Then point the tool at the local forwarded port:
 
-```
-python -m wazuh_sysmon_triage run \
-  --start 2024-01-01T00:00:00Z \
-  --end 2024-01-01T01:00:00Z \
-  --agent-id 010 \
-  --host https://indexer:9200 \
-  --user admin \
-  --password password \
+```powershell
+$env:WAZUH_OS_HOST = "https://127.0.0.1:9920"
+python -m wazuh_sysmon_triage run --no-verify-tls \
+  --case-id INCIDENT-TUNNEL-001 \
+  --agent-name "anon" \
+  --start "2026-02-10T00:00:00Z" \
+  --end   "2026-02-10T02:00:00Z" \
+  --event-id 1 --event-id 3 --event-id 11 \
   --out-dir ./out
 ```
 
-## Output examples
+Recommended (PowerShell one-liner, dynamic 2-hour window, venv interpreter):
 
-timeline.csv (rows):
-
-```
-ts,event_id,image,command_line,parent_image,target_filename,user,rule_id,agent_name,agent_id
-2024-01-01T00:00:00Z,1,C:\Windows\System32\schtasks.exe,schtasks.exe /create,,,HOST-A\user,92203,anon,010
-2024-01-01T00:01:00Z,1,C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe,powershell.exe -enc aQBlAHgA,C:\Windows\System32\schtasks.exe,,,92204,anon,010
-2024-01-01T00:02:00Z,11,C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe,,,,C:\ProgramData\lab_demo.ps1,HOST-A\user,92205,anon,010
+```powershell
+$env:WAZUH_OS_HOST = "https://127.0.0.1:9920"; $start = (Get-Date).AddHours(-2).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"); $end = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"); & ".\.venv\Scripts\python.exe" -m wazuh_sysmon_triage run --config .\config.local.yaml --start $start --end $end --case-id "incident-002-eid1-3-11" --agent-name "anon" --no-verify-tls --event-id 1 --event-id 3 --event-id 11
 ```
 
-process_tree.json (keys):
+## What success looks like
 
-```
-{
-  "agent": { "name": "anon" },
-  "time_range": { "start": "2024-01-01T00:00:00Z", "end": "2024-01-01T00:02:00Z" },
-  "nodes": [ ... ],
-  "edges": [ ... ],
-  "artifacts": [ ... ]
-}
-```
+When a run succeeds, you should see:
 
-report.md (headings):
+- A new output folder: `out/<case-id>/`
+- Non-empty `timeline.csv`, `process_tree.json`, and `report.md`
+- `stats.json` reflecting counts/timing for the run and indicating whether truncation occurred
+- A `query.json` (inputs captured) and `run_metadata.json` (execution context)
 
-```
-# Incident Summary
-## Executive summary
-## Observed process chains
-## Artifacts & IOCs
-## Detections
-## Notes
-```
+For the offline sample, reviewers should be able to run the Quickstart command and consistently get the same bundle structure and stable ordering.
 
-## Design decisions
+## Documentation
 
-- PIT + search_after: stable pagination across large indices
-- Normalized schema: strict, typed fields for downstream processing
-- Explainable correlation: explicit edge reasons and artifact confidence
-- Deterministic outputs: stable ordering for repeatable reports
+- `docs/LAB_SETUP.md` — minimal lab requirements (Wazuh + Sysmon)
+- `docs/REPRODUCE.md` — copy/paste reproduction commands (offline + online)
+- `docs/OUTPUTS.md` — how to interpret each output
+- `docs/TROUBLESHOOTING.md` — common issues (indexer vs dashboards, TLS, tunnel, auth)
+
+## Scope and limitations
+
+- This is a defensive triage and documentation tool.
+- Detection is heuristic and evidence-driven; outputs are designed to be explainable and repeatable.
+- Environmental noise (EDR/Defender, browsers, IDEs) is expected in real telemetry.
 
 ## Running tests
 
-```
+```powershell
 python -m pytest -q
-python -m pytest --cov=src/wazuh_sysmon_triage --cov-report=term-missing
 ```
-
-## Roadmap
-
-- Add EID 3 (network), EID 7 (image load), EID 13 (registry set)
-- Improve ATT&CK mappings
-- Sigma-like rule tagging and enrichment
 
 ## License
 

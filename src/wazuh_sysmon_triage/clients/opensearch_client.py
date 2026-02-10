@@ -62,6 +62,41 @@ class OpenSearchClient:
         while True:
             attempt += 1
             response = self.client.request(method, path, json=json_body)
+
+            # Friendly diagnostics when users accidentally point at OpenSearch Dashboards
+            # (often exposed on :443) instead of the OpenSearch Indexer HTTP API (often :9200).
+            if response.status_code in {301, 302, 303, 307, 308}:
+                location = response.headers.get("location") or ""
+                if "/app/login" in location:
+                    raise ValueError(
+                        "Endpoint looks like OpenSearch Dashboards (redirects to /app/login). "
+                        "Point --host (or WAZUH_OS_HOST) to the OpenSearch Indexer HTTP API instead "
+                        "(commonly https://<indexer>:9200)."
+                    )
+
+            if response.status_code >= 400:
+                try:
+                    body = response.json()
+                except Exception:
+                    body = None
+
+                if isinstance(body, dict) and {"statusCode", "error", "message"}.issubset(body.keys()):
+                    # This error shape is typical of Dashboards/proxy handlers.
+                    if body.get("statusCode") == 404 and str(body.get("message", "")).lower() == "not found":
+                        raise ValueError(
+                            "Received 404 Not Found from the server. This often means --host points to "
+                            "Wazuh/OpenSearch Dashboards (web UI) rather than the OpenSearch Indexer API. "
+                            "Try https://<indexer>:9200 (or open port 9200 / fix firewall)."
+                        )
+
+            # Some Wazuh indexer deployments do not expose the PIT API.
+            # OpenSearch/Elasticsearch typically return a 400 with a "no handler found" message.
+            if response.status_code == 400 and "_pit" in path and "no handler found for uri" in response.text:
+                raise ValueError(
+                    "PIT API not supported by this OpenSearch endpoint. "
+                    "The triage tool will need to fall back to non-PIT pagination (search_after without PIT) "
+                    "or you must upgrade/enable PIT support on the indexer."
+                )
             if response.status_code in RETRY_STATUS_CODES and attempt <= self.max_retries:
                 retry_after = response.headers.get("Retry-After")
                 if retry_after and retry_after.isdigit():
@@ -86,6 +121,37 @@ class OpenSearchClient:
             response.raise_for_status()
             request_id = response.headers.get("x-request-id")
             return response.json(), request_id
+
+    def search_index(
+        self,
+        index_pattern: str,
+        query_body: dict[str, Any],
+        search_after: list | None = None,
+        run_id: str | None = None,
+        case_id: str | None = None,
+    ) -> dict[str, Any]:
+        body = dict(query_body)
+        if search_after:
+            body["search_after"] = search_after
+        response, request_id = self._request(
+            "POST",
+            f"/{index_pattern}/_search",
+            json_body=body,
+            run_id=run_id,
+            case_id=case_id,
+        )
+        hits_count = len(response.get("hits", {}).get("hits", []))
+        LOGGER.info(
+            "Search completed",
+            extra={
+                "event": "search",
+                "stage": "fetch",
+                "run_id": run_id,
+                "case_id": case_id,
+                "counts": {"hits": hits_count},
+            },
+        )
+        return response
 
     def create_pit(
         self,
