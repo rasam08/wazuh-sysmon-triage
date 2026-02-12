@@ -37,6 +37,10 @@ target-version = "py312"
 select = ["E", "F", "I", "UP", "B"]
 ignore = ["E501"]
 
+[tool.ruff.lint.per-file-ignores]
+# typer 0.4.x requires typing.Optional instead of X | None for CLI params
+"src/wazuh_sysmon_triage/cli.py" = ["UP045"]
+
 [tool.mypy]
 python_version = "3.12"
 warn_unused_ignores = true

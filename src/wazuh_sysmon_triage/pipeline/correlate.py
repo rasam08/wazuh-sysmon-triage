@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
-import os
+import ntpath
 from collections import defaultdict
 from collections.abc import Iterable
 from datetime import UTC, datetime
@@ -76,7 +76,7 @@ def _is_public_ip(value: str) -> bool:
 def _basename(path: str | None) -> str:
     if not path:
         return ""
-    return os.path.basename(path).lower()
+    return ntpath.basename(path).lower()
 
 
 def _norm_path(path: str | None) -> str:
@@ -100,7 +100,7 @@ def _is_script_write(target: str | None) -> bool:
     if not target:
         return False
     target_lower = target.lower()
-    ext = os.path.splitext(target_lower)[1]
+    ext = ntpath.splitext(target_lower)[1]
     if ext not in SCRIPT_EXTENSIONS:
         return False
     return any(marker in target_lower for marker in SUSPICIOUS_PATH_MARKERS)

@@ -5,7 +5,7 @@ import logging
 import os
 from pathlib import Path
 from time import perf_counter
-from typing import TypedDict
+from typing import Optional, TypedDict
 
 import typer
 
@@ -93,30 +93,30 @@ def _resolve_config(
 
 @app.command("fetch")
 def fetch_command(
-    start: str | None = typer.Option(None, help="Start time in ISO8601 format."),
-    end: str | None = typer.Option(None, help="End time in ISO8601 format."),
-    agent_id: str | None = typer.Option(None, help="Agent ID."),
-    agent_name: str | None = typer.Option(None, help="Agent Name."),
+    start: Optional[str] = typer.Option(None, help="Start time in ISO8601 format."),
+    end: Optional[str] = typer.Option(None, help="End time in ISO8601 format."),
+    agent_id: Optional[str] = typer.Option(None, help="Agent ID."),
+    agent_name: Optional[str] = typer.Option(None, help="Agent Name."),
     out_dir: str = typer.Option("./out", help="Output directory."),
-    host: str | None = typer.Option(None, help="Host for OpenSearch."),
-    user: str | None = typer.Option(None, help="Username for OpenSearch."),
-    password: str | None = typer.Option(None, help="Password for OpenSearch."),
+    host: Optional[str] = typer.Option(None, help="Host for OpenSearch."),
+    user: Optional[str] = typer.Option(None, help="Username for OpenSearch."),
+    password: Optional[str] = typer.Option(None, help="Password for OpenSearch."),
     verify_tls: bool = typer.Option(True, help="Verify TLS certificate."),
     index_pattern: str = typer.Option("wazuh-alerts-4.x-*", help="Index pattern for OpenSearch."),
-    event_id: list[int] | None = typer.Option(
+    event_id: Optional[list[int]] = typer.Option(
         None,
         "--event-id",
         help="Sysmon event ID(s) to include. Repeatable (e.g. --event-id 1 --event-id 3 --event-id 11).",
     ),
     agent_mode: str = typer.Option("any", help="Agent filter mode: any|all."),
-    raw_save: str | None = typer.Option(None, help="Optional NDJSON output path for raw hits."),
+    raw_save: Optional[str] = typer.Option(None, help="Optional NDJSON output path for raw hits."),
     log_level: str = typer.Option("INFO", help="Logging level."),
     log_json: bool = typer.Option(True, help="Emit JSON logs."),
-    log_file: str | None = typer.Option(None, help="Optional log file path."),
+    log_file: Optional[str] = typer.Option(None, help="Optional log file path."),
     max_events: int = typer.Option(20000, help="Maximum events to fetch."),
     max_pages: int = typer.Option(200, help="Maximum PIT pages to fetch."),
     fail_on_truncation: bool = typer.Option(False, help="Fail if results are truncated."),
-    config: str | None = typer.Option(None, help="Path to YAML config file."),
+    config: Optional[str] = typer.Option(None, help="Path to YAML config file."),
 ):
     run_ctx = RunContext()
     log_path = Path(log_file).resolve() if log_file else None
@@ -272,33 +272,33 @@ def fetch_command(
 
 @app.command("run")
 def run_command(
-    start: str | None = typer.Option(None, help="Start time in ISO8601 format."),
-    end: str | None = typer.Option(None, help="End time in ISO8601 format."),
-    agent_id: str | None = typer.Option(None, help="Agent ID."),
-    agent_name: str | None = typer.Option(None, help="Agent Name."),
+    start: Optional[str] = typer.Option(None, help="Start time in ISO8601 format."),
+    end: Optional[str] = typer.Option(None, help="End time in ISO8601 format."),
+    agent_id: Optional[str] = typer.Option(None, help="Agent ID."),
+    agent_name: Optional[str] = typer.Option(None, help="Agent Name."),
     out_dir: str = typer.Option("./out", help="Output directory."),
-    host: str | None = typer.Option(None, help="Host for OpenSearch."),
-    user: str | None = typer.Option(None, help="Username for OpenSearch."),
-    password: str | None = typer.Option(None, help="Password for OpenSearch."),
+    host: Optional[str] = typer.Option(None, help="Host for OpenSearch."),
+    user: Optional[str] = typer.Option(None, help="Username for OpenSearch."),
+    password: Optional[str] = typer.Option(None, help="Password for OpenSearch."),
     verify_tls: bool = typer.Option(True, help="Verify TLS certificate."),
     index_pattern: str = typer.Option("wazuh-alerts-4.x-*", help="Index pattern for OpenSearch."),
-    event_id: list[int] | None = typer.Option(
+    event_id: Optional[list[int]] = typer.Option(
         None,
         "--event-id",
         help="Sysmon event ID(s) to include. Repeatable (e.g. --event-id 1 --event-id 3 --event-id 11).",
     ),
     agent_mode: str = typer.Option("any", help="Agent filter mode: any|all."),
-    raw_save: str | None = typer.Option(None, help="Optional NDJSON output path for raw hits."),
+    raw_save: Optional[str] = typer.Option(None, help="Optional NDJSON output path for raw hits."),
     log_level: str = typer.Option("INFO", help="Logging level."),
     log_json: bool = typer.Option(True, help="Emit JSON logs."),
-    log_file: str | None = typer.Option(None, help="Optional log file path."),
+    log_file: Optional[str] = typer.Option(None, help="Optional log file path."),
     max_events: int = typer.Option(20000, help="Maximum events to fetch."),
     max_pages: int = typer.Option(200, help="Maximum PIT pages to fetch."),
     fail_on_truncation: bool = typer.Option(False, help="Fail if results are truncated."),
     print_stats: bool = typer.Option(False, help="Print a summary table after the run."),
-    case_id: str | None = typer.Option(None, help="Optional case ID for case bundle output."),
-    input_ndjson: str | None = typer.Option(None, help="Run offline from NDJSON hits."),
-    config: str | None = typer.Option(None, help="Path to YAML config file."),
+    case_id: Optional[str] = typer.Option(None, help="Optional case ID for case bundle output."),
+    input_ndjson: Optional[str] = typer.Option(None, help="Run offline from NDJSON hits."),
+    config: Optional[str] = typer.Option(None, help="Path to YAML config file."),
 ):
     run_ctx = RunContext(case_id=case_id)
     setup_logging(log_level, json=log_json, out_path=None)

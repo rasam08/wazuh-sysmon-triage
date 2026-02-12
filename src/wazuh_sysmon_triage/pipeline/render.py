@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import ntpath
 import os
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
@@ -166,7 +167,7 @@ def render_report(data: dict, output_dir: str) -> None:
             score = 0
             if parent.guid in artifacts_by_creator or child.guid in artifacts_by_creator:
                 score += 2
-            if os.path.basename(parent.image).lower() in {
+            if ntpath.basename(parent.image).lower() in {
                 "powershell.exe",
                 "pwsh.exe",
                 "cscript.exe",
@@ -174,7 +175,7 @@ def render_report(data: dict, output_dir: str) -> None:
                 "python.exe",
             }:
                 score += 1
-            if os.path.basename(child.image).lower() in {
+            if ntpath.basename(child.image).lower() in {
                 "powershell.exe",
                 "pwsh.exe",
                 "cscript.exe",
@@ -183,7 +184,7 @@ def render_report(data: dict, output_dir: str) -> None:
             }:
                 score += 1
             chain_scores.append(
-                (score, f"{os.path.basename(parent.image)} -> {os.path.basename(child.image)}")
+                (score, f"{ntpath.basename(parent.image)} -> {ntpath.basename(child.image)}")
             )
 
     chains = [chain for _, chain in sorted(chain_scores, key=lambda item: item[0], reverse=True)][
