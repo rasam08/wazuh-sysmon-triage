@@ -100,12 +100,16 @@ function runDryRunProbe(
 
     let stdout = '';
     let stderr = '';
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk.toString();
-    });
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString();
-    });
+    if (child.stdout) {
+      child.stdout.on('data', (chunk) => {
+        stdout += chunk.toString();
+      });
+    }
+    if (child.stderr) {
+      child.stderr.on('data', (chunk) => {
+        stderr += chunk.toString();
+      });
+    }
 
     child.on('error', (error) => {
       if (fs.existsSync(probeOutDir)) {

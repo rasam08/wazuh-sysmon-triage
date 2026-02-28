@@ -9,6 +9,8 @@ export interface StandaloneServerOptions {
   outDir?: string;
   distDir?: string;
   port?: number;
+  bindHost?: string;
+  publicBind?: boolean;
   authUser?: string;
   authPass?: string;
 }
@@ -19,6 +21,34 @@ function parsePositiveInt(raw: string | undefined, fallback: number): number {
     return parsed;
   }
   return fallback;
+}
+
+function parseBoolean(raw: string | undefined, fallback = false): boolean {
+  if (raw === undefined) return fallback;
+  const normalized = raw.trim().toLowerCase();
+  if (!normalized) return fallback;
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return fallback;
+}
+
+function isLoopbackHost(host: string): boolean {
+  const normalized = host.trim().toLowerCase();
+  return normalized === '127.0.0.1'
+    || normalized === 'localhost'
+    || normalized === '::1'
+    || normalized === '[::1]';
+}
+
+function resolveBindConfig(options: StandaloneServerOptions): { bindHost: string; publicBind: boolean } {
+  const publicBind = options.publicBind ?? parseBoolean(process.env.PUBLIC_BIND, false);
+  const hostFromOptions = options.bindHost?.trim();
+  const hostFromEnv = process.env.BIND_HOST?.trim() || process.env.HOST?.trim();
+  const bindHost = hostFromOptions || hostFromEnv || (publicBind ? '0.0.0.0' : '127.0.0.1');
+  if (!publicBind && !isLoopbackHost(bindHost)) {
+    throw new Error(`Non-local bind host "${bindHost}" requires PUBLIC_BIND=true.`);
+  }
+  return { bindHost, publicBind };
 }
 
 function safeEqual(a: string, b: string): boolean {
@@ -120,16 +150,26 @@ export function createStandaloneApp(options: StandaloneServerOptions = {}) {
 
 export function startStandaloneServer(options: StandaloneServerOptions = {}) {
   const port = options.port ?? parsePositiveInt(process.env.PORT, 4173);
+  const authUser = options.authUser ?? process.env.AUTH_USER;
+  const authPass = options.authPass ?? process.env.AUTH_PASS;
+  const { bindHost, publicBind } = resolveBindConfig(options);
+  if (!isLoopbackHost(bindHost) && !(authUser && authPass)) {
+    throw new Error(`Non-local bind host "${bindHost}" requires AUTH_USER and AUTH_PASS.`);
+  }
+
   const app = createStandaloneApp(options);
-  app.listen(port, '0.0.0.0', () => {
-    const authEnabled = Boolean((options.authUser ?? process.env.AUTH_USER) && (options.authPass ?? process.env.AUTH_PASS));
+  const server = app.listen(port, bindHost, () => {
+    const authEnabled = Boolean(authUser && authPass);
     process.stdout.write(`${JSON.stringify({
       ts: new Date().toISOString(),
       event: 'standalone_server_started',
       port,
+      bind_host: bindHost,
+      public_bind: publicBind,
       auth_enabled: authEnabled,
     })}\n`);
   });
+  return server;
 }
 
 const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : '';

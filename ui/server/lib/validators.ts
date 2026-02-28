@@ -40,6 +40,8 @@ export interface RunParams {
 
 interface ValidateRunParamsOptions {
   defaultOutDir: string;
+  rootDir?: string;
+  allowedOfflineInputRoots?: string[];
   defaultCaseId?: () => string;
 }
 
@@ -161,6 +163,48 @@ function isValidDate(value: string): boolean {
   return Number.isFinite(date.getTime());
 }
 
+function isInsideRoot(rootDir: string, candidatePath: string): boolean {
+  const relative = path.relative(rootDir, candidatePath);
+  return !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
+function normalizeAllowedOfflineRoots(options: ValidateRunParamsOptions): string[] {
+  const rootDir = path.resolve(options.rootDir ?? '.');
+  const configuredRoots = options.allowedOfflineInputRoots?.length
+    ? options.allowedOfflineInputRoots
+    : ['samples'];
+  return configuredRoots.map((entry) => path.resolve(rootDir, entry));
+}
+
+function validateOfflineInputFile(
+  value: string | undefined,
+  options: ValidateRunParamsOptions,
+): string | undefined {
+  if (!value) return undefined;
+  if (value.includes('\0')) {
+    throw new ValidationError('input_file contains invalid characters');
+  }
+  if (path.isAbsolute(value)) {
+    throw new ValidationError('offline input_file must be a relative path');
+  }
+
+  const normalized = path.normalize(value);
+  const parts = normalized.split(/[\\/]+/).filter(Boolean);
+  if (parts.includes('..')) {
+    throw new ValidationError('offline input_file contains path traversal segments');
+  }
+
+  const rootDir = path.resolve(options.rootDir ?? '.');
+  const resolved = path.resolve(rootDir, normalized);
+  const allowedRoots = normalizeAllowedOfflineRoots(options);
+  const allowed = allowedRoots.some((allowedRoot) => isInsideRoot(allowedRoot, resolved));
+  if (!allowed) {
+    throw new ValidationError('offline input_file must resolve under an allowed input root');
+  }
+
+  return normalized;
+}
+
 function defaultCaseId(): string {
   return `incident-${Date.now()}`;
 }
@@ -245,7 +289,9 @@ export function validateRunParams(body: unknown, options: ValidateRunParamsOptio
     end,
     agent_name: toOptionalString(raw.agent_name),
     agent_id: toOptionalString(raw.agent_id),
-    input_file: mode === 'offline' ? toOptionalString(raw.input_file) : undefined,
+    input_file: mode === 'offline'
+      ? validateOfflineInputFile(toOptionalString(raw.input_file), options)
+      : undefined,
     queues,
     include_dev_queue: includeDevQueue,
     min_alert_score: minAlertScore,

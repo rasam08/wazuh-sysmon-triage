@@ -13,9 +13,10 @@ import { useAlertsStore, useToastStore, useAlertAnnotationsStore, useSettingsSto
 import { filterAlerts, sortAlerts } from '@/data/parsers';
 import { fetchAlertBundle } from '@/data/api';
 import {
-  Button, Drawer, ScoreBadge, QueueBadge, ConfidenceBadge, Badge, LoadingSpinner, EmptyState,
+  Button, Drawer, ScoreBadge, QueueBadge, ConfidenceBadge, Badge, LoadingSpinner, EmptyState, ShortcutModal,
 } from '@/components';
-import { exportAlert, openBundleInTab, copyToClipboard } from '@/utils/exports';
+import { AlertFilterBar } from './AlertFilterBar';
+import { exportAlert, exportAlertsCsv, openBundleInTab, copyToClipboard } from '@/utils/exports';
 import { formatDateTime, formatTime } from '@/utils/datetime';
 import type { Alert, AlertBundle, AlertQueue, AlertCategory, Confidence, AlertFilters } from '@/types';
 
@@ -86,6 +87,7 @@ export default function AlertWorkbenchScreen() {
   const [bundleLoading, setBundleLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<(typeof TABS)[number]>('overview');
   const [noteText, setNoteText] = useState('');
+  const [shortcutModalOpen, setShortcutModalOpen] = useState(false);
   const [sorting, setSorting] = useState<SortingState>([]);
   const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: alertsPageSize });
   const queryKey = searchParams.toString();
@@ -130,8 +132,19 @@ export default function AlertWorkbenchScreen() {
 
   const processed = useMemo(() => {
     const filtered = filterAlerts(alerts, filters);
-    return sortAlerts(filtered, sort);
-  }, [alerts, filters, sort]);
+    const sorted = sortAlerts(filtered, sort);
+    const pinnedIds = new Set(
+      Object.entries(annotations.annotations)
+        .filter(([, v]) => v.pinned)
+        .map(([k]) => k),
+    );
+    if (pinnedIds.size === 0) return sorted;
+    return [...sorted].sort((a, b) => {
+      const ap = pinnedIds.has(a.alert_id) ? 0 : 1;
+      const bp = pinnedIds.has(b.alert_id) ? 0 : 1;
+      return ap - bp;
+    });
+  }, [alerts, filters, sort, annotations.annotations]);
 
   const selectedAlert = useMemo(
     () => alerts.find((a) => a.alert_id === selectedAlertId),
@@ -206,28 +219,75 @@ export default function AlertWorkbenchScreen() {
         const isFp = annotations.isFalsePositive(currentAlert.alert_id);
         addToast('success', isFp ? `Marked ${currentAlert.alert_id} as false positive` : `Removed false positive mark for ${currentAlert.alert_id}`);
         void openAlert(currentAlert.alert_id);
+        return;
+      }
+
+      if (key === 'p') {
+        event.preventDefault();
+        annotations.togglePinned(currentAlert.alert_id);
+        const nowPinned = annotations.isPinned(currentAlert.alert_id);
+        addToast('success', nowPinned ? `Pinned ${currentAlert.alert_id}` : `Unpinned ${currentAlert.alert_id}`, 1200);
+        return;
+      }
+
+      if (key === '?') {
+        event.preventDefault();
+        setShortcutModalOpen(true);
+        return;
+      }
+
+      if (drawerOpen && key >= '1' && key <= '6') {
+        const tabIndex = Number(key) - 1;
+        if (tabIndex < TABS.length) {
+          event.preventDefault();
+          setActiveTab(TABS[tabIndex]);
+        }
       }
     };
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [addToast, annotations, navigateSelection, openAlert, processed, selectedAlert]);
+  }, [addToast, annotations, drawerOpen, navigateSelection, openAlert, processed, selectedAlert, setShortcutModalOpen]);
+
+  useEffect(() => {
+    if (!selectedAlertId) return;
+    const row = document.querySelector(`[data-alert-row="${selectedAlertId}"]`);
+    if (row && typeof row.scrollIntoView === 'function') row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [selectedAlertId]);
 
   const columns = useMemo(() => [
     col.accessor('alert_id', {
       header: 'Alert ID',
-      cell: (i) => (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            void openAlert(i.getValue());
-          }}
-          className="text-blue-400 hover:underline font-mono text-xs"
-        >
-          {i.getValue()}
-        </button>
-      ),
-      size: 90,
+      cell: (i) => {
+        const id = i.getValue();
+        const ann = annotations.getAnnotation(id);
+        const hasDot = ann.pinned || ann.false_positive || ann.escalated || ann.notes.length > 0;
+        return (
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                void openAlert(id);
+              }}
+              className="text-blue-400 hover:underline font-mono text-xs"
+            >
+              {id}
+            </button>
+            {hasDot && (
+              <span
+                title={[
+                  ann.pinned && 'pinned',
+                  ann.false_positive && 'false positive',
+                  ann.escalated && 'escalated',
+                  ann.notes.length > 0 && `${ann.notes.length} note${ann.notes.length > 1 ? 's' : ''}`,
+                ].filter(Boolean).join(', ')}
+                className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${ann.escalated ? 'bg-red-400' : ann.pinned ? 'bg-yellow-400' : 'bg-blue-400'}`}
+              />
+            )}
+          </div>
+        );
+      },
+      size: 110,
     }),
     col.accessor('utc_time', {
       header: 'Time',
@@ -257,7 +317,7 @@ export default function AlertWorkbenchScreen() {
       cell: (i) => <span className="text-xs text-gray-400 truncate block max-w-[260px]" title={i.getValue()}>{i.getValue()}</span>,
       size: 240,
     }),
-  ], [openAlert, monospaceCommands, dateFormat]);
+  ], [openAlert, monospaceCommands, dateFormat, annotations]);
 
   const table = useReactTable({
     data: processed,
@@ -270,110 +330,37 @@ export default function AlertWorkbenchScreen() {
     getPaginationRowModel: getPaginationRowModel(),
   });
 
-  const toggleFilter = <T extends string>(arr: T[], val: T, setter: (v: T[]) => void) => {
-    setter(arr.includes(val) ? arr.filter((x) => x !== val) : [...arr, val]);
-  };
-
   if (loading && !alerts.length) return <LoadingSpinner label="Loading alerts..." />;
 
   return (
     <div className="flex flex-col h-[calc(100vh-8rem)]">
-      <div className="flex-shrink-0 bg-gray-900 border border-gray-800 rounded-lg p-3 mb-4 space-y-3">
-        <div className="flex items-center gap-3">
-          <input
-            placeholder="Search alerts..."
-            value={filters.search}
-            onChange={(e) => setFilters({ search: e.target.value })}
-            aria-label="Search alerts"
-            className="flex-1 max-w-xs bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 placeholder:text-gray-600 focus:border-blue-500 focus:outline-none"
-          />
-          <div className="flex items-center gap-1 text-xs text-gray-500">
-            <span>Sort:</span>
-            {(['score', 'utc_time', 'confidence'] as const).map((field) => (
-              <button
-                key={field}
-                onClick={() => setSort({ field, direction: sort.field === field && sort.direction === 'desc' ? 'asc' : 'desc' })}
-                className={`px-2 py-1 rounded ${sort.field === field ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}
-              >
-                {field === 'utc_time' ? 'newest' : field} {sort.field === field ? (sort.direction === 'desc' ? 'v' : '^') : ''}
-              </button>
-            ))}
-          </div>
-          <div className="flex items-center gap-1.5 ml-auto text-xs">
-            <span className="text-gray-500">{processed.length} of {alerts.length} alerts</span>
-            <span className="text-gray-600 hidden lg:inline">Shortcuts: j/k navigate, e escalate, f mark FP</span>
-            <Button variant="ghost" size="sm" onClick={resetFilters}>Clear Filters</Button>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap gap-4">
-          <div className="flex items-center gap-1">
-            <span className="text-xs text-gray-500 mr-1">Queue:</span>
-            {QUEUE_OPTIONS.map((queue) => (
-              <button
-                key={queue}
-                onClick={() => toggleFilter(filters.queues, queue, (v) => setFilters({ queues: v }))}
-                aria-pressed={filters.queues.includes(queue)}
-                className={`px-2 py-0.5 rounded text-xs ${filters.queues.includes(queue) ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}
-              >
-                {queue.replace('soc_', '')}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex items-center gap-1">
-            <span className="text-xs text-gray-500 mr-1">Category:</span>
-            {CATEGORY_OPTIONS.map((category) => (
-              <button
-                key={category}
-                onClick={() => toggleFilter(filters.categories, category, (v) => setFilters({ categories: v }))}
-                aria-pressed={filters.categories.includes(category)}
-                className={`px-2 py-0.5 rounded text-xs ${filters.categories.includes(category) ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}
-              >
-                {category.replace(/_/g, ' ')}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex items-center gap-1">
-            <span className="text-xs text-gray-500 mr-1">Confidence:</span>
-            {CONFIDENCE_OPTIONS.map((confidence) => (
-              <button
-                key={confidence}
-                onClick={() => toggleFilter(filters.confidences, confidence, (v) => setFilters({ confidences: v }))}
-                aria-pressed={filters.confidences.includes(confidence)}
-                className={`px-2 py-0.5 rounded text-xs ${filters.confidences.includes(confidence) ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}
-              >
-                {confidence}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-500">Score:</span>
-            <input
-              type="number"
-              min={0}
-              max={100}
-              value={filters.score_min}
-              onChange={(e) => setFilters({ score_min: Number(e.target.value) })}
-              aria-label="Minimum score"
-              className="w-14 bg-gray-800 border border-gray-700 rounded px-2 py-0.5 text-xs text-gray-300 focus:outline-none"
-            />
-            <span className="text-gray-600">-</span>
-            <input
-              type="number"
-              min={0}
-              max={100}
-              value={filters.score_max}
-              onChange={(e) => setFilters({ score_max: Number(e.target.value) })}
-              aria-label="Maximum score"
-              className="w-14 bg-gray-800 border border-gray-700 rounded px-2 py-0.5 text-xs text-gray-300 focus:outline-none"
-            />
-          </div>
-        </div>
+      <AlertFilterBar
+        filters={filters}
+        sort={sort}
+        totalAlerts={alerts.length}
+        filteredCount={processed.length}
+        setFilters={setFilters}
+        setSort={setSort}
+        resetFilters={resetFilters}
+      />
+      <div className="flex items-center justify-end gap-2 mb-2">
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => exportAlertsCsv(processed, undefined, activeCaseId ?? undefined)}
+          title="Export filtered alerts as CSV"
+        >
+          Export CSV ({processed.length})
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => setShortcutModalOpen(true)}
+          title="Keyboard shortcuts (?)"
+        >
+          ?
+        </Button>
       </div>
-
       {processed.length === 0 ? (
         <EmptyState title="No alerts match filters" description="Try adjusting your filter criteria" action={<Button variant="secondary" onClick={resetFilters}>Reset Filters</Button>} />
       ) : (
@@ -400,6 +387,7 @@ export default function AlertWorkbenchScreen() {
               {table.getRowModel().rows.map((row) => (
                 <tr
                   key={row.id}
+                  data-alert-row={row.original.alert_id}
                   className={`border-b border-gray-800/30 hover:bg-gray-800/40 cursor-pointer transition-colors ${row.original.alert_id === selectedAlertId ? 'bg-blue-950/30' : ''}`}
                   onClick={() => { void openAlert(row.original.alert_id); }}
                 >
@@ -466,7 +454,7 @@ export default function AlertWorkbenchScreen() {
                   <DRow label="Image" value={selectedAlert.image} mono={monospaceCommands} />
                   <DRow label="Command Line" value={selectedAlert.command_line} mono={monospaceCommands} />
                   <DRow label="Parent Image" value={selectedAlert.parent_image} mono={monospaceCommands} />
-                  <DRow label="Destination" value={`${selectedAlert.destination_ip}:${selectedAlert.destination_port ?? '-'}`} />
+                  <DRow label="Destination" value={selectedAlert.destination_ip ? `${selectedAlert.destination_ip}:${selectedAlert.destination_port ?? '\u2014'}` : '\u2014'} />
                   {showProcessGuids && <DRow label="Process GUID" value={selectedAlert.process_guid} mono={monospaceCommands} />}
                   <DRow label="Reason" value={selectedAlert.reason} />
                 </dl>
@@ -686,6 +674,17 @@ export default function AlertWorkbenchScreen() {
                 </Button>
                 <Button
                   size="sm"
+                  variant={annotations.isPinned(selectedAlert.alert_id) ? 'ghost' : 'secondary'}
+                  onClick={() => {
+                    annotations.togglePinned(selectedAlert.alert_id);
+                    const nowPinned = annotations.isPinned(selectedAlert.alert_id);
+                    addToast('success', nowPinned ? 'Alert pinned' : 'Alert unpinned', 1200);
+                  }}
+                >
+                  {annotations.isPinned(selectedAlert.alert_id) ? '★ Pinned' : '☆ Pin'}
+                </Button>
+                <Button
+                  size="sm"
                   variant="ghost"
                   onClick={() => {
                     exportAlert(selectedAlert, activeCaseId ?? undefined);
@@ -701,6 +700,7 @@ export default function AlertWorkbenchScreen() {
           <p className="text-sm text-gray-500">No alert selected</p>
         )}
       </Drawer>
+      <ShortcutModal open={shortcutModalOpen} onClose={() => setShortcutModalOpen(false)} />
     </div>
   );
 }

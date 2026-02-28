@@ -12,6 +12,7 @@ import {
   LoadingSpinner,
   ErrorPanel,
 } from '@/components';
+import { SkeletonDashboard } from '@/components/Skeleton';
 import { useRunsStore, useAlertsStore, useSettingsStore } from '@/stores';
 import { fetchHealth } from '@/data/api';
 import type { Alert, HealthStatus } from '@/types';
@@ -30,32 +31,53 @@ function formatMs(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-function buildAlertTrend(alerts: Alert[], completedAt?: string) {
-  const anchor = completedAt ? new Date(completedAt) : new Date();
-  if (Number.isNaN(anchor.getTime())) return [];
-  anchor.setMinutes(0, 0, 0);
+function buildAlertTrend(alerts: Alert[]) {
+  if (alerts.length === 0) return { buckets: [], bucketLabel: '1h' };
 
-  const buckets = Array.from({ length: 12 }, (_, idx) => {
-    const d = new Date(anchor.getTime() - (11 - idx) * 3_600_000);
-    const key = d.toISOString().slice(0, 13);
+  const times = alerts
+    .map((a) => new Date(a.utc_time).getTime())
+    .filter((t) => Number.isFinite(t));
+
+  if (times.length === 0) return { buckets: [], bucketLabel: '1h' };
+
+  const minTime = Math.min(...times);
+  const maxTime = Math.max(...times);
+  const rangeMs = maxTime - minTime;
+
+  // Pick bucket granularity and count based on actual spread
+  let bucketMs: number;
+  let bucketLabel: string;
+  if (rangeMs <= 30 * 60_000) {
+    bucketMs = 2.5 * 60_000; bucketLabel = '2.5m';
+  } else if (rangeMs <= 3 * 3_600_000) {
+    bucketMs = 15 * 60_000; bucketLabel = '15m';
+  } else if (rangeMs <= 12 * 3_600_000) {
+    bucketMs = 3_600_000; bucketLabel = '1h';
+  } else {
+    bucketMs = 2 * 3_600_000; bucketLabel = '2h';
+  }
+
+  const BUCKET_COUNT = 12;
+  const endAligned = Math.ceil(maxTime / bucketMs) * bucketMs;
+  const startAligned = endAligned - (BUCKET_COUNT - 1) * bucketMs;
+
+  const buckets = Array.from({ length: BUCKET_COUNT }, (_, idx) => {
+    const t = startAligned + idx * bucketMs;
     return {
-      key,
-      label: d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      key: String(t),
+      label: new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       alerts: 0,
     };
   });
 
-  const byKey = new Map(buckets.map((b) => [b.key, b]));
   for (const alert of alerts) {
-    const ts = new Date(alert.utc_time);
-    if (Number.isNaN(ts.getTime())) continue;
-    ts.setMinutes(0, 0, 0);
-    const key = ts.toISOString().slice(0, 13);
-    const bucket = byKey.get(key);
-    if (bucket) bucket.alerts += 1;
+    const ts = new Date(alert.utc_time).getTime();
+    if (!Number.isFinite(ts)) continue;
+    const idx = Math.floor((ts - startAligned) / bucketMs);
+    if (idx >= 0 && idx < BUCKET_COUNT) buckets[idx].alerts += 1;
   }
 
-  return buckets;
+  return { buckets, bucketLabel };
 }
 
 export default function DashboardScreen() {
@@ -68,15 +90,30 @@ export default function DashboardScreen() {
   const [health, setHealth] = React.useState<HealthStatus | null>(null);
   const [healthLoading, setHealthLoading] = React.useState(false);
 
+  // Run selector — default to first completed run
+  const completedRuns = useMemo(() => runs.filter((r) => Boolean(r.stats) && Boolean(r.metadata)), [runs]);
+  const [selectedRunId, setSelectedRunId] = React.useState<string | null>(null);
+  const [compareRunId, setCompareRunId] = React.useState<string | null>(null);
+
+  useEffect(() => {
+    if (!selectedRunId && completedRuns.length > 0) {
+      setSelectedRunId(completedRuns[0].id);
+    }
+  }, [completedRuns, selectedRunId]);
+
+  const dashboardRun = useMemo(
+    () => completedRuns.find((r) => r.id === selectedRunId) ?? completedRuns[0] ?? null,
+    [completedRuns, selectedRunId],
+  );
+  const compareRun = useMemo(
+    () => completedRuns.find((r) => r.id === compareRunId) ?? null,
+    [completedRuns, compareRunId],
+  );
+  const dashboardCaseId = dashboardRun?.params.case_id ?? null;
+
   useEffect(() => {
     void fetchRuns();
   }, [fetchRuns]);
-
-  const dashboardRun = useMemo(
-    () => runs.find((run) => Boolean(run.stats) && Boolean(run.metadata)) ?? null,
-    [runs],
-  );
-  const dashboardCaseId = dashboardRun?.params.case_id ?? null;
 
   useEffect(() => {
     if (dashboardCaseId) {
@@ -128,7 +165,7 @@ export default function DashboardScreen() {
   }, [dashboardCaseId, activeCaseId, alerts]);
 
   if (runsLoading && !runs.length) {
-    return <LoadingSpinner label="Loading dashboard..." />;
+    return <SkeletonDashboard />;
   }
 
   if (runsError && !runs.length) {
@@ -149,7 +186,8 @@ export default function DashboardScreen() {
   const meta = dashboardRun.metadata;
   const topAlerts = [...dashboardAlerts].sort((a, b) => b.score - a.score).slice(0, 8);
   const highConfidenceCount = dashboardAlerts.filter((a) => a.score >= thresholds.high_confidence_min_score).length;
-  const trendData = buildAlertTrend(dashboardAlerts, meta.completed_at);
+  const trendData = buildAlertTrend(dashboardAlerts);
+  const { buckets: trendBuckets, bucketLabel } = trendData;
 
   const queueData = Object.entries(stats.queues).map(([name, value]) => ({
     name: name.replace('soc_', ''),
@@ -170,14 +208,43 @@ export default function DashboardScreen() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-xl font-bold text-gray-100">Dashboard</h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            Operational overview - last run {meta.completed_at ? formatDateTime(meta.completed_at, dateFormat) : 'N/A'}
+            Last run {meta.completed_at ? formatDateTime(meta.completed_at, dateFormat) : 'N/A'}
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
+          {/* Run selector */}
+          {completedRuns.length > 1 && (
+            <select
+              value={selectedRunId ?? ''}
+              onChange={(e) => { setSelectedRunId(e.target.value); setCompareRunId(null); }}
+              aria-label="Select run to display"
+              className="bg-gray-800 border border-gray-700 text-sm text-gray-200 rounded-md px-2.5 py-1.5 focus:border-blue-500 focus:outline-none"
+            >
+              {completedRuns.map((r) => (
+                <option key={r.id} value={r.id}>{r.params.case_id}</option>
+              ))}
+            </select>
+          )}
+          {/* Compare selector */}
+          {completedRuns.length > 1 && (
+            <select
+              value={compareRunId ?? ''}
+              onChange={(e) => setCompareRunId(e.target.value || null)}
+              aria-label="Compare with run"
+              className="bg-gray-800 border border-gray-700 text-sm text-gray-400 rounded-md px-2.5 py-1.5 focus:border-blue-500 focus:outline-none"
+            >
+              <option value="">Compare with…</option>
+              {completedRuns
+                .filter((r) => r.id !== (selectedRunId ?? completedRuns[0]?.id))
+                .map((r) => (
+                  <option key={r.id} value={r.id}>{r.params.case_id}</option>
+                ))}
+            </select>
+          )}
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-gray-900 border border-gray-800">
             <span className={`h-2 w-2 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-yellow-400'}`} />
             <span className="text-xs font-medium text-gray-300">{isLive ? 'Live' : 'Offline'}</span>
@@ -225,15 +292,15 @@ export default function DashboardScreen() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <Card title="Alert Volume (12h)" className="lg:col-span-2">
+        <Card title={`Alert Volume (per ${bucketLabel})`} className="lg:col-span-2">
           <div className="h-56">
             {alertsLoading && dashboardAlerts.length === 0 ? (
               <LoadingSpinner label="Loading alerts..." />
-            ) : trendData.length === 0 ? (
+            ) : trendBuckets.length === 0 ? (
               <p className="text-sm text-gray-500">No alert timeline available</p>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={trendData}>
+                <AreaChart data={trendBuckets}>
                   <defs>
                     <linearGradient id="alertGrad" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor="#ef4444" stopOpacity={0.3} />
@@ -354,7 +421,7 @@ export default function DashboardScreen() {
             <table className="w-full text-left">
               <thead>
                 <tr className="border-b border-gray-800 text-xs text-gray-500 uppercase tracking-wider">
-                  <th className="px-3 py-2">ID</th>
+                  <th className="px-3 py-2 w-10">#</th>
                   <th className="px-3 py-2">Score</th>
                   <th className="px-3 py-2">Type</th>
                   <th className="px-3 py-2">Queue</th>
@@ -362,16 +429,17 @@ export default function DashboardScreen() {
                   <th className="px-3 py-2">Image</th>
                   <th className="px-3 py-2">Reason</th>
                   <th className="px-3 py-2">Time</th>
+                  <th className="px-3 py-2 w-8"></th>
                 </tr>
               </thead>
               <tbody>
-                {topAlerts.map((alert) => (
+                {topAlerts.map((alert, rowIdx) => (
                   <tr
                     key={alert.alert_id}
                     className="border-b border-gray-800/50 hover:bg-gray-800/30 cursor-pointer transition-colors"
                     onClick={() => navigate(`/alerts?case=${encodeURIComponent(dashboardRun.params.case_id)}&search=${encodeURIComponent(alert.alert_id)}`)}
                   >
-                    <td className="px-3 py-2 text-sm font-mono text-gray-300">{alert.alert_id}</td>
+                    <td className="px-3 py-2 text-xs text-gray-600 tabular-nums">{rowIdx + 1}</td>
                     <td className="px-3 py-2"><ScoreBadge score={alert.score} /></td>
                     <td className="px-3 py-2 text-xs text-gray-400">{alert.rule_name ?? alert.alert_type}</td>
                     <td className="px-3 py-2"><QueueBadge queue={alert.queue} /></td>
@@ -382,6 +450,9 @@ export default function DashboardScreen() {
                     <td className="px-3 py-2 text-xs text-gray-400 max-w-[260px] truncate">{alert.reason}</td>
                     <td className="px-3 py-2 text-xs text-gray-500 whitespace-nowrap">
                       {formatTime(alert.utc_time, dateFormat)}
+                    </td>
+                    <td className="px-3 py-2">
+                      <span className="text-gray-600 hover:text-blue-400 text-base leading-none" aria-hidden="true">→</span>
                     </td>
                   </tr>
                 ))}
@@ -491,6 +562,72 @@ export default function DashboardScreen() {
           )}
         </Card>
       </div>
+
+      {/* Run comparison delta card */}
+      {compareRun?.stats && (
+        <Card
+          title={`Δ vs ${compareRun.params.case_id}`}
+          actions={
+            <button
+              onClick={() => setCompareRunId(null)}
+              className="text-xs text-gray-600 hover:text-gray-400 transition-colors"
+              aria-label="Clear comparison"
+            >
+              × clear
+            </button>
+          }
+        >
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <DeltaMetric
+              label="Alerts"
+              current={stats.alerts_generated}
+              prev={compareRun.stats.alerts_generated}
+            />
+            <DeltaMetric
+              label="High Conf."
+              current={highConfidenceCount}
+              prev={compareRun.stats.confidence_distribution?.['high'] ?? 0}
+            />
+            <DeltaMetric
+              label="Suppressed"
+              current={stats.alerts_suppressed}
+              prev={compareRun.stats.alerts_suppressed}
+            />
+            <DeltaMetric
+              label="Susp. Dest."
+              current={stats.suspicious_destinations}
+              prev={compareRun.stats.suspicious_destinations}
+            />
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function DeltaMetric({ label, current, prev }: { label: string; current: number; prev: number }) {
+  const delta = current - prev;
+  const pct = prev === 0 ? null : Math.round((delta / prev) * 100);
+  const up = delta > 0;
+  const neutral = delta === 0;
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-xs text-gray-500 uppercase tracking-wide">{label}</span>
+      <div className="flex items-baseline gap-2">
+        <span className="text-lg font-bold text-gray-100">{current}</span>
+        {!neutral && (
+          <span
+            className={`text-xs font-medium ${
+              up ? 'text-red-400' : 'text-emerald-400'
+            }`}
+            aria-label={`${delta > 0 ? 'increased' : 'decreased'} by ${Math.abs(delta)}`}
+          >
+            {up ? '+' : ''}{delta}{pct !== null ? ` (${pct > 0 ? '+' : ''}{pct}%)` : ''}
+          </span>
+        )}
+        {neutral && <span className="text-xs text-gray-600">=</span>}
+      </div>
+      <span className="text-[10px] text-gray-600">prev: {prev}</span>
     </div>
   );
 }

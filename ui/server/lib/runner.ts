@@ -27,11 +27,20 @@ export interface RunExecutionResult {
   exit_code: number | null;
   stdout_tail: string;
   stderr_tail: string;
+  cancelled: boolean;
+  cancel_reason: 'user' | 'timeout' | null;
+}
+
+export interface CancelRunResult {
+  cancelled: boolean;
+  case_id: string;
+  reason: 'user';
 }
 
 export interface SpawnedProcess {
   stdout: NodeJS.ReadableStream;
   stderr: NodeJS.ReadableStream;
+  kill?: (signal?: NodeJS.Signals | number) => boolean;
   on(event: string, listener: (...args: unknown[]) => void): this;
 }
 
@@ -46,14 +55,20 @@ interface RunnerOptions {
   configPath?: string;
   spawnProcess?: SpawnProcess;
   resolvePythonExe?: () => string;
+  runTimeoutMs?: number;
 }
 
 export interface Runner {
   previewRun: (params: RunParams) => ApiRunPreview;
   startRun: (params: RunParams) => Promise<RunExecutionResult>;
+  cancelRun: (caseId: string) => CancelRunResult;
+  isCaseActive: (caseId: string) => boolean;
+  getActiveCaseId: () => string | null;
 }
 
 const STDIO_TAIL_LIMIT = 64 * 1024;
+const DEFAULT_RUN_TIMEOUT_MS = 15 * 60 * 1000;
+const KILL_GRACE_PERIOD_MS = 5000;
 
 function shellQuote(arg: string): string {
   if (/^[a-zA-Z0-9_./:-]+$/.test(arg)) return arg;
@@ -72,6 +87,15 @@ function appendTail(current: string, chunk: string): string {
   const combined = current + chunk;
   if (combined.length <= STDIO_TAIL_LIMIT) return combined;
   return combined.slice(combined.length - STDIO_TAIL_LIMIT);
+}
+
+function parseRunTimeoutMs(value: string | undefined, fallback: number): number {
+  if (!value) return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 1000) {
+    return fallback;
+  }
+  return Math.round(parsed);
 }
 
 function resolvePythonExe(rootDir: string): string {
@@ -146,8 +170,18 @@ export function createRunner(options: RunnerOptions): Runner {
   );
   const spawnProcess = options.spawnProcess ?? defaultSpawn;
   const getPythonExe = options.resolvePythonExe ?? (() => resolvePythonExe(rootDir));
+  const runTimeoutMs = options.runTimeoutMs ?? parseRunTimeoutMs(
+    process.env.TRIAGE_RUN_TIMEOUT_MS,
+    DEFAULT_RUN_TIMEOUT_MS,
+  );
 
-  let runInProgress = false;
+  type CancelReason = 'user' | 'timeout';
+  interface ActiveRunState {
+    caseId: string;
+    cancelReason: CancelReason | null;
+    requestCancel: (reason: CancelReason) => boolean;
+  }
+  let activeRun: ActiveRunState | null = null;
 
   const previewRun = (params: RunParams): ApiRunPreview => {
     const pythonExe = getPythonExe();
@@ -181,7 +215,7 @@ export function createRunner(options: RunnerOptions): Runner {
     if (params.dry_run) {
       throw new RunnerError('dry_run is preview-only; use /api/runs/preview', 400);
     }
-    if (runInProgress) {
+    if (activeRun) {
       throw new RunnerError('run already in progress', 409);
     }
 
@@ -204,18 +238,75 @@ export function createRunner(options: RunnerOptions): Runner {
 
     const pythonExe = getPythonExe();
     const cliArgs = buildCliArgs(params, configPath);
-
-    runInProgress = true;
+    const runState: ActiveRunState = {
+      caseId: params.case_id,
+      cancelReason: null,
+      requestCancel: () => false,
+    };
+    activeRun = runState;
     try {
       const result = await new Promise<RunExecutionResult>((resolve, reject) => {
         let stdoutTail = '';
         let stderrTail = '';
+        let child: SpawnedProcess | null = null;
+        let timeoutHandle: NodeJS.Timeout | null = null;
+        let forceKillHandle: NodeJS.Timeout | null = null;
 
-        const child: SpawnedProcess = spawnProcess(pythonExe, cliArgs, {
+        const cleanupTimers = () => {
+          if (timeoutHandle) {
+            clearTimeout(timeoutHandle);
+            timeoutHandle = null;
+          }
+          if (forceKillHandle) {
+            clearTimeout(forceKillHandle);
+            forceKillHandle = null;
+          }
+        };
+
+        const terminateChild = () => {
+          if (!child || typeof child.kill !== 'function') return;
+          try {
+            child.kill('SIGTERM');
+          } catch {
+            return;
+          }
+          forceKillHandle = setTimeout(() => {
+            if (!child || typeof child.kill !== 'function') return;
+            try {
+              child.kill('SIGKILL');
+            } catch {
+              // Best effort only.
+            }
+          }, KILL_GRACE_PERIOD_MS);
+          if (typeof forceKillHandle.unref === 'function') {
+            forceKillHandle.unref();
+          }
+        };
+
+        runState.requestCancel = (reason: CancelReason) => {
+          if (runState.cancelReason) return false;
+          runState.cancelReason = reason;
+          terminateChild();
+          return true;
+        };
+
+        child = spawnProcess(pythonExe, cliArgs, {
           cwd: rootDir,
           env: { ...process.env, PYTHONPATH: path.resolve(rootDir, 'src') },
           windowsHide: true,
         });
+
+        if (runTimeoutMs > 0) {
+          timeoutHandle = setTimeout(() => {
+            runState.requestCancel('timeout');
+          }, runTimeoutMs);
+          if (typeof timeoutHandle.unref === 'function') {
+            timeoutHandle.unref();
+          }
+        }
+        if (runState.cancelReason) {
+          terminateChild();
+        }
 
         (child.stdout as NodeJS.ReadableStream).on('data', (chunk: Buffer | string) => {
           const text = chunk.toString();
@@ -230,11 +321,13 @@ export function createRunner(options: RunnerOptions): Runner {
         });
 
         child.on('error', (error: unknown) => {
+          cleanupTimers();
           const message = error instanceof Error ? error.message : String(error);
           reject(new RunnerError(`Failed to start run: ${message}`));
         });
 
         child.on('close', (code: unknown) => {
+          cleanupTimers();
           resolve({
             case_id: params.case_id,
             case_dir: caseDir,
@@ -242,6 +335,8 @@ export function createRunner(options: RunnerOptions): Runner {
             exit_code: typeof code === 'number' || code === null ? code : null,
             stdout_tail: stdoutTail,
             stderr_tail: stderrTail,
+            cancelled: runState.cancelReason !== null,
+            cancel_reason: runState.cancelReason,
           });
         });
       });
@@ -251,18 +346,51 @@ export function createRunner(options: RunnerOptions): Runner {
         fs.copyFileSync(logPath, caseLogPath);
       }
 
+      if (result.cancelled) {
+        if (result.cancel_reason === 'timeout') {
+          const timeoutSeconds = Math.ceil(runTimeoutMs / 1000);
+          throw new RunnerError(`Run timed out after ${timeoutSeconds} seconds`, 408);
+        }
+        throw new RunnerError(`Run ${params.case_id} cancelled`, 409);
+      }
       if (result.exit_code !== 0) {
         throw new RunnerError(result.stderr_tail || result.stdout_tail || 'Run failed');
       }
       return result;
     } finally {
       logStream.end();
-      runInProgress = false;
+      if (activeRun === runState) {
+        activeRun = null;
+      }
     }
   };
+
+  const cancelRun = (caseId: string): CancelRunResult => {
+    const active = activeRun;
+    if (!active) {
+      throw new RunnerError('No active run to cancel', 409);
+    }
+    if (active.caseId !== caseId) {
+      throw new RunnerError(`Case ${caseId} is not active; active case is ${active.caseId}`, 409);
+    }
+    if (active.cancelReason) {
+      throw new RunnerError(`Cancellation already requested for case ${caseId}`, 409);
+    }
+    active.requestCancel('user');
+    return { cancelled: true, case_id: caseId, reason: 'user' };
+  };
+
+  const isCaseActive = (caseId: string): boolean => (
+    Boolean(activeRun && activeRun.caseId === caseId)
+  );
+
+  const getActiveCaseId = (): string | null => activeRun?.caseId ?? null;
 
   return {
     previewRun,
     startRun,
+    cancelRun,
+    isCaseActive,
+    getActiveCaseId,
   };
 }

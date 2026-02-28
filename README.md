@@ -182,6 +182,18 @@ npm --prefix ui start
 
 Default bind: `http://127.0.0.1:4173`
 
+For non-local access, set `PUBLIC_BIND=true` and provide auth credentials:
+
+```powershell
+$env:PUBLIC_BIND = "true"
+$env:BIND_HOST = "0.0.0.0"
+$env:AUTH_USER = "analyst"
+$env:AUTH_PASS = "changeme"
+npm --prefix ui start
+```
+
+Non-loopback binds are rejected unless `PUBLIC_BIND=true` and `AUTH_USER`/`AUTH_PASS` are both set.
+
 The UI server auto-detects the artifacts directory when `--out-dir` is not provided. It checks `out` first, then `output`, preferring whichever already contains case artifacts. The recommended convention is `out`, but earlier runs under `output` are still discovered automatically.
 
 Optional HTTP Basic auth for all routes:
@@ -198,7 +210,10 @@ Build and run a single deployable image (Python CLI + Node standalone server):
 
 ```powershell
 docker build -t wazuh-sysmon-triage:latest .
-docker run --rm -p 4173:4173 -v ${PWD}/out:/app/out wazuh-sysmon-triage:latest
+docker run --rm -p 4173:4173 -v ${PWD}/out:/app/out `
+  -e PUBLIC_BIND=true -e BIND_HOST=0.0.0.0 `
+  -e AUTH_USER=analyst -e AUTH_PASS=changeme `
+  wazuh-sysmon-triage:latest
 ```
 
 Enable optional basic auth in container:

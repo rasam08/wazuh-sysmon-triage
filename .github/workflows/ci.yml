@@ -21,10 +21,36 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install .
           python -m pip install pytest pytest-cov ruff mypy types-PyYAML
+          python -m pip install bandit pip-audit detect-secrets
       - name: Install UI dependencies
         run: |
           npm --prefix ui ci
           npx --prefix ui playwright install --with-deps chromium
+      - name: Security gate
+        run: |
+          python -m bandit -q -r src -lll
+          python -m pip_audit --strict
+          npm --prefix ui audit --audit-level=critical
+          TMP_SECRETS="$(mktemp)"
+          detect-secrets scan --all-files --exclude-files '(^ui/node_modules/|^\.git/)' > "$TMP_SECRETS"
+          export TMP_SECRETS
+          python - <<'PY'
+          import json
+          import os
+          import sys
+
+          path = os.environ["TMP_SECRETS"]
+          with open(path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+          findings = payload.get("results", {})
+          active = {name: rows for name, rows in findings.items() if rows}
+          if active:
+            print("Secret scan findings:")
+            for file_name, rows in sorted(active.items()):
+              print(f"- {file_name}: {len(rows)} finding(s)")
+            sys.exit(1)
+          print("No secrets found by detect-secrets scan.")
+          PY
       - name: Lint
         run: python -m ruff check src tests
       - name: Type-check

@@ -1,11 +1,12 @@
 import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Button, Card } from '@/components';
+import { Button, Card, SuccessCheck, CopiedIcon } from '@/components';
 import { useRunsStore, useToastStore, useSettingsStore } from '@/stores';
 import type { RunParams, AlertQueue, Profile, TimePreset, RunMode } from '@/types';
 import type { RunPreset } from '@/stores/settings-store';
 import { copyToClipboard } from '@/utils/exports';
 import { fetchRunPreview, type RunPreview } from '@/data/api';
+import { useCopyFeedback } from '@/hooks/useCopyFeedback';
 
 const QUEUES: AlertQueue[] = ['soc_malware', 'soc_policy', 'soc_dev', 'soc_info'];
 const PROFILES: Profile[] = ['soc', 'dev', 'lab'];
@@ -59,6 +60,9 @@ export default function NewRunScreen() {
   const [running, setRunning] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
   const [preview, setPreview] = useState<PreviewState | null>(null);
+  const [showSuccess, setShowSuccess] = useState(false);
+  const { copy: copyCli, copied: copiedCli } = useCopyFeedback();
+  const { copy: copyJson, copied: copiedJson } = useCopyFeedback();
 
   const selectedRun = useMemo(
     () => runs.find((r) => r.id === selectedRunId) ?? null,
@@ -165,7 +169,11 @@ export default function NewRunScreen() {
     try {
       const runId = await startRun(params);
       addToast('success', `Run completed: ${caseId}`);
-      navigate(`/runs?selected=${runId}`);
+      setShowSuccess(true);
+      setTimeout(() => {
+        setShowSuccess(false);
+        navigate(`/runs?selected=${runId}`);
+      }, 1200);
     } catch (e) {
       addToast('error', `Run failed: ${(e as Error).message}`);
     } finally {
@@ -214,6 +222,7 @@ export default function NewRunScreen() {
     setVerifyTls(undefined);
     setErrors([]);
     setPreview(null);
+    addToast('info', 'Form reset to defaults');
   };
 
   const stages = ['fetch', 'normalize', 'correlate', 'detect', 'render'];
@@ -531,21 +540,21 @@ export default function NewRunScreen() {
                 size="sm"
                 variant="ghost"
                 onClick={async () => {
-                  const ok = await copyToClipboard(previewCommand);
-                  addToast(ok ? 'success' : 'error', ok ? 'CLI preview copied' : 'Copy failed');
+                  const ok = await copyCli(previewCommand);
+                  if (!ok) addToast('error', 'Copy failed');
                 }}
               >
-                Copy CLI
+                {copiedCli ? <CopiedIcon /> : 'Copy CLI'}
               </Button>
               <Button
                 size="sm"
                 variant="ghost"
                 onClick={async () => {
-                  const ok = await copyToClipboard(JSON.stringify(preview.preview.params, null, 2));
-                  addToast(ok ? 'success' : 'error', ok ? 'Preview JSON copied' : 'Copy failed');
+                  const ok = await copyJson(JSON.stringify(preview.preview.params, null, 2));
+                  if (!ok) addToast('error', 'Copy failed');
                 }}
               >
-                Copy JSON
+                {copiedJson ? <CopiedIcon /> : 'Copy JSON'}
               </Button>
             </div>
           }
@@ -572,6 +581,12 @@ export default function NewRunScreen() {
             </div>
           </div>
         </Card>
+      )}
+
+      {showSuccess && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-950/70 backdrop-blur-sm">
+          <SuccessCheck size={72} label={`Run ${caseId} completed`} />
+        </div>
       )}
 
       <div className="flex items-center gap-3 pt-2">

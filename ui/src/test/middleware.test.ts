@@ -140,6 +140,44 @@ describe('triage API middleware', () => {
     }
   });
 
+  it('applies rate limits per client key (not globally per route)', async () => {
+    const outDir = path.resolve('ui/.tmp-middleware-rate-limit-clients');
+    fs.rmSync(outDir, { recursive: true, force: true });
+    fs.mkdirSync(outDir, { recursive: true });
+    vi.spyOn(process.stdout, 'write').mockImplementation((_chunk: unknown) => true);
+
+    const server = await startApiServer({
+      outDir,
+      rateLimitMaxRequests: 2,
+      rateLimitWindowMs: 60_000,
+      clientKeyResolver: (req) => {
+        const raw = req.headers['x-test-client'];
+        const value = Array.isArray(raw) ? raw[0] : raw;
+        return typeof value === 'string' ? value : 'unknown';
+      },
+    });
+    try {
+      for (let idx = 0; idx < 2; idx += 1) {
+        const response = await requestApi(server.origin, '/api/runs', {
+          headers: { 'x-test-client': 'client-a' },
+        });
+        expect(response.status).toBe(200);
+      }
+
+      const limited = await requestApi(server.origin, '/api/runs', {
+        headers: { 'x-test-client': 'client-a' },
+      });
+      expect(limited.status).toBe(429);
+
+      const otherClient = await requestApi(server.origin, '/api/runs', {
+        headers: { 'x-test-client': 'client-b' },
+      });
+      expect(otherClient.status).toBe(200);
+    } finally {
+      await server.close();
+    }
+  });
+
   it('writes structured JSON middleware logs to stdout', async () => {
     const outDir = path.resolve('ui/.tmp-middleware-logging');
     fs.rmSync(outDir, { recursive: true, force: true });

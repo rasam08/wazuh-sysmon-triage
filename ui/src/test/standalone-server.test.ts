@@ -4,7 +4,7 @@ import { createServer, request as httpRequest, type IncomingHttpHeaders, type Se
 import path from 'node:path';
 import type { Express } from 'express';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createStandaloneApp } from '../../server/standalone-server';
+import { createStandaloneApp, startStandaloneServer } from '../../server/standalone-server';
 
 interface RunningServer {
   origin: string;
@@ -132,5 +132,53 @@ describe('standalone express server', () => {
     } finally {
       await server.close();
     }
+  });
+
+  it('rejects non-local bind without auth credentials', () => {
+    const outDir = makeTempDir('out-public-no-auth');
+    const distDir = makeTempDir('dist-public-no-auth');
+    fs.writeFileSync(path.resolve(distDir, 'index.html'), '<html><body>public</body></html>', 'utf-8');
+
+    expect(() => startStandaloneServer({
+      rootDir: path.resolve('.'),
+      outDir,
+      distDir,
+      port: 0,
+      bindHost: '0.0.0.0',
+      publicBind: true,
+    })).toThrow(/AUTH_USER and AUTH_PASS/i);
+  });
+
+  it('allows explicit non-local bind when auth is configured', async () => {
+    const outDir = makeTempDir('out-public-auth');
+    const distDir = makeTempDir('dist-public-auth');
+    fs.writeFileSync(path.resolve(distDir, 'index.html'), '<html><body>public-auth</body></html>', 'utf-8');
+
+    const server = startStandaloneServer({
+      rootDir: path.resolve('.'),
+      outDir,
+      distDir,
+      port: 0,
+      bindHost: '0.0.0.0',
+      publicBind: true,
+      authUser: 'analyst',
+      authPass: 'secret',
+    });
+    await new Promise<void>((resolve) => {
+      if (server.listening) {
+        resolve();
+        return;
+      }
+      server.once('listening', () => resolve());
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
   });
 });

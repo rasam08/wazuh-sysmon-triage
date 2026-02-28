@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useRunsStore, useCaseStore, useToastStore, useSettingsStore } from '@/stores';
 import {
   Button, Card, Badge, StatusBadge, KpiTile, EmptyState, LoadingSpinner, useConfirmModal,
+  SkeletonKpiRow, SkeletonTable,
 } from '@/components';
 import { formatDateTime } from '@/utils/datetime';
 import { deleteCase as deleteCaseApi } from '@/data/api';
@@ -75,7 +76,12 @@ export default function CaseListScreen() {
     }
   };
 
-  if (loading && !runs.length) return <LoadingSpinner label="Loading cases..." />;
+  if (loading && !runs.length) return (
+    <div className="space-y-6 animate-fade-in-up">
+      <SkeletonKpiRow count={3} />
+      <SkeletonTable rows={5} cols={7} />
+    </div>
+  );
 
   if (!cases.length) {
     return (

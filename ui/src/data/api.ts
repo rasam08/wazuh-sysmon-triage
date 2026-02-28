@@ -79,6 +79,15 @@ export async function startRun(params: RunParams, init?: RequestInit): Promise<R
   return payload.run;
 }
 
+export async function cancelRun(caseId: string): Promise<void> {
+  await requestJson<{ cancelled: boolean; case_id: string; reason: string }>(
+    apiPath(`/runs/${encodeURIComponent(caseId)}/cancel`),
+    {
+      method: 'POST',
+    },
+  );
+}
+
 export async function fetchRunPreview(params: RunParams): Promise<RunPreview> {
   const payload = await requestJson<{ preview: RunPreview }>(apiPath('/runs/preview'), {
     method: 'POST',

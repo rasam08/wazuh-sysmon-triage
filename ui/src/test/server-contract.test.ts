@@ -318,13 +318,25 @@ function fakeSpawn(delayMs = 30, exitCode = 0) {
     const stderr = new PassThrough();
     proc.stdout = stdout;
     proc.stderr = stderr;
+    let settled = false;
 
-    setTimeout(() => {
-      stdout.write('ok\n');
+    const closeWithCode = (code: number) => {
+      if (settled) return;
+      settled = true;
       stdout.end();
       stderr.end();
-      proc.emit('close', exitCode);
+      proc.emit('close', code);
+    };
+
+    const closeTimer = setTimeout(() => {
+      stdout.write('ok\n');
+      closeWithCode(exitCode);
     }, delayMs);
+    proc.kill = () => {
+      clearTimeout(closeTimer);
+      closeWithCode(1);
+      return true;
+    };
 
     return proc;
   };
@@ -348,8 +360,13 @@ describe('server contract routes', () => {
           exit_code: 0,
           stdout_tail: 'ok',
           stderr_tail: '',
+          cancelled: false,
+          cancel_reason: null,
         };
       }),
+      cancelRun: vi.fn(),
+      isCaseActive: vi.fn(() => false),
+      getActiveCaseId: vi.fn(() => null),
     };
 
     const runResponse = await dispatchApiRequest(
@@ -522,10 +539,122 @@ describe('server contract routes', () => {
     expect(missingResponse?.status).toBe(404);
   });
 
+  it('blocks deleting a case while that case run is active', async () => {
+    const outDir = path.resolve('ui/.tmp-server-delete-active-guard');
+    fs.rmSync(outDir, { recursive: true, force: true });
+    fs.mkdirSync(outDir, { recursive: true });
+    createCurrentCase(outDir, 'CASE-ACTIVE-DELETE-001');
+
+    const guardedRunner = {
+      previewRun: vi.fn(),
+      startRun: vi.fn(),
+      cancelRun: vi.fn(),
+      isCaseActive: vi.fn((caseId: string) => caseId === 'CASE-ACTIVE-DELETE-001'),
+      getActiveCaseId: vi.fn(() => 'CASE-ACTIVE-DELETE-001'),
+    };
+
+    const response = await dispatchApiRequest(
+      { method: 'DELETE', url: '/api/cases/CASE-ACTIVE-DELETE-001' },
+      { outDir, runner: guardedRunner },
+    );
+    expect(response).not.toBeNull();
+    expect(response?.status).toBe(409);
+    expect(fs.existsSync(path.resolve(outDir, 'CASE-ACTIVE-DELETE-001'))).toBe(true);
+  });
+
+  it('rejects offline input_file absolute and traversal paths', async () => {
+    const outDir = path.resolve('ui/.tmp-server-offline-path-guard');
+    fs.rmSync(outDir, { recursive: true, force: true });
+    fs.mkdirSync(outDir, { recursive: true });
+
+    const badRequests = [
+      'C:\\outside\\input.ndjson',
+      '..\\samples\\scenario_gym\\encoded_powershell.ndjson',
+    ];
+
+    for (const inputFile of badRequests) {
+      const response = await dispatchApiRequest(
+        {
+          method: 'POST',
+          url: '/api/runs/preview',
+          body: {
+            params: {
+              mode: 'offline',
+              case_id: 'CASE-OFFLINE-PATH-001',
+              input_file: inputFile,
+            },
+          },
+        },
+        {
+          rootDir: path.resolve('.'),
+          outDir,
+          offlineInputRoots: ['samples'],
+        },
+      );
+      expect(response).not.toBeNull();
+      expect(response?.status).toBe(400);
+    }
+  });
+
+  it('supports cancelling an active run via API', async () => {
+    const outDir = path.resolve('ui/.tmp-server-cancel-run');
+    fs.rmSync(outDir, { recursive: true, force: true });
+    fs.mkdirSync(outDir, { recursive: true });
+
+    const runner = createRunner({
+      rootDir: path.resolve('.'),
+      runTimeoutMs: 30_000,
+      spawnProcess: fakeSpawn(250),
+    });
+
+    const runPromise = dispatchApiRequest(
+      {
+        method: 'POST',
+        url: '/api/runs',
+        body: {
+          params: {
+            ...buildParams(outDir, 'CASE-CANCEL-001'),
+            input_file: 'samples/scenario_gym/encoded_powershell.ndjson',
+          },
+        },
+      },
+      {
+        rootDir: path.resolve('.'),
+        outDir,
+        runner,
+        offlineInputRoots: ['samples'],
+      },
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const cancelResponse = await dispatchApiRequest(
+      {
+        method: 'POST',
+        url: '/api/runs/CASE-CANCEL-001/cancel',
+      },
+      { outDir, runner },
+    );
+    expect(cancelResponse).not.toBeNull();
+    expect(cancelResponse?.status).toBe(202);
+    expect(cancelResponse?.body).toEqual({
+      cancelled: true,
+      case_id: 'CASE-CANCEL-001',
+      reason: 'user',
+    });
+
+    const runResponse = await runPromise;
+    expect(runResponse).not.toBeNull();
+    expect(runResponse?.status).toBe(409);
+    expect(runResponse?.body).toEqual({ error: expect.stringContaining('cancelled') });
+  });
+
   it('fails fast on invalid run params and does not call startRun', async () => {
     const fakeRunner = {
       previewRun: vi.fn(),
       startRun: vi.fn(),
+      cancelRun: vi.fn(),
+      isCaseActive: vi.fn(() => false),
+      getActiveCaseId: vi.fn(() => null),
     };
     const response = await dispatchApiRequest(
       {
@@ -609,6 +738,51 @@ describe('runner safety guards', () => {
     const first = runner.startRun(buildParams(outDir, 'CASE-LOCK-A'));
     await expect(runner.startRun(buildParams(outDir, 'CASE-LOCK-B'))).rejects.toMatchObject({ status: 409 });
     await first;
+  });
+
+  it('supports explicit cancellation and releases run lock', async () => {
+    const outDir = path.resolve('ui/.tmp-runner-cancel');
+    fs.rmSync(outDir, { recursive: true, force: true });
+    fs.mkdirSync(outDir, { recursive: true });
+
+    const runner = createRunner({
+      rootDir: path.resolve('.'),
+      runTimeoutMs: 30_000,
+      spawnProcess: fakeSpawn(200),
+    });
+
+    const firstRun = runner.startRun(buildParams(outDir, 'CASE-CANCEL-A'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(runner.cancelRun('CASE-CANCEL-A')).toEqual({
+      cancelled: true,
+      case_id: 'CASE-CANCEL-A',
+      reason: 'user',
+    });
+    await expect(firstRun).rejects.toMatchObject({ status: 409 });
+    await expect(runner.startRun(buildParams(outDir, 'CASE-CANCEL-B'))).resolves.toMatchObject({
+      case_id: 'CASE-CANCEL-B',
+    });
+  });
+
+  it('enforces run timeout and releases run lock afterwards', async () => {
+    const outDir = path.resolve('ui/.tmp-runner-timeout');
+    fs.rmSync(outDir, { recursive: true, force: true });
+    fs.mkdirSync(outDir, { recursive: true });
+
+    let invocation = 0;
+    const runner = createRunner({
+      rootDir: path.resolve('.'),
+      runTimeoutMs: 30,
+      spawnProcess: () => {
+        invocation += 1;
+        return invocation === 1 ? fakeSpawn(200)() : fakeSpawn(1)();
+      },
+    });
+
+    await expect(runner.startRun(buildParams(outDir, 'CASE-TIMEOUT-A'))).rejects.toMatchObject({ status: 408 });
+    await expect(runner.startRun(buildParams(outDir, 'CASE-TIMEOUT-B'))).resolves.toMatchObject({
+      case_id: 'CASE-TIMEOUT-B',
+    });
   });
 
   it('requires explicit overwrite permission when case folder exists', async () => {

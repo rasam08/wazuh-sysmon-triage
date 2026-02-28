@@ -20,6 +20,7 @@ import { validateCaseId, validateRunParams, ValidationError } from './validators
 interface RouteOptions {
   rootDir?: string;
   outDir?: string;
+  offlineInputRoots?: string[];
   runner?: Runner;
 }
 
@@ -27,6 +28,7 @@ interface MiddlewareOptions extends RouteOptions {
   rateLimitMaxRequests?: number;
   rateLimitWindowMs?: number;
   now?: () => number;
+  clientKeyResolver?: (req: IncomingMessage) => string;
 }
 
 export interface ApiDispatchRequest {
@@ -43,6 +45,7 @@ interface ApiDispatchResponse {
 interface RouteContext {
   rootDir: string;
   outDir: string;
+  offlineInputRoots: string[];
   runner: Runner;
 }
 
@@ -55,6 +58,7 @@ interface RequestLogLine {
   ts: string;
   event: 'api_request';
   request_id: string;
+  client_key: string;
   method: string;
   route: string;
   path: string;
@@ -85,6 +89,23 @@ function resolveDefaultOutDir(rootDir: string): string {
   if (fs.existsSync(outDir)) return outDir;
   if (fs.existsSync(outputDir)) return outputDir;
   return outDir;
+}
+
+function resolveOfflineInputRoots(rootDir: string, options: RouteOptions): string[] {
+  if (options.offlineInputRoots?.length) {
+    return options.offlineInputRoots.map((entry) => path.resolve(rootDir, entry));
+  }
+  const configured = process.env.TRIAGE_OFFLINE_INPUT_ROOTS;
+  if (configured) {
+    const values = configured
+      .split(path.delimiter)
+      .map((value) => value.trim())
+      .filter(Boolean);
+    if (values.length) {
+      return values.map((entry) => path.resolve(rootDir, entry));
+    }
+  }
+  return [path.resolve(rootDir, 'samples')];
 }
 
 function normalizeApiPath(pathname: string): string | null {
@@ -124,8 +145,9 @@ function toErrorResponse(error: unknown): ApiDispatchResponse {
 function resolveContext(options: RouteOptions = {}): RouteContext {
   const rootDir = options.rootDir ? path.resolve(options.rootDir) : path.resolve(__dirname, '..', '..', '..');
   const outDir = options.outDir ? path.resolve(options.outDir) : resolveDefaultOutDir(rootDir);
+  const offlineInputRoots = resolveOfflineInputRoots(rootDir, options);
   const runner = options.runner ?? createRunner({ rootDir });
-  return { rootDir, outDir, runner };
+  return { rootDir, outDir, offlineInputRoots, runner };
 }
 
 export async function dispatchApiRequest(
@@ -146,7 +168,11 @@ export async function dispatchApiRequest(
     }
 
     if (route === '/api/runs' && method === 'POST') {
-      const params = validateRunParams(request.body, { defaultOutDir: context.outDir });
+      const params = validateRunParams(request.body, {
+        defaultOutDir: context.outDir,
+        rootDir: context.rootDir,
+        allowedOfflineInputRoots: context.offlineInputRoots,
+      });
       if (params.dry_run) {
         throw new ValidationError('dry_run is preview-only; use POST /api/runs/preview');
       }
@@ -163,8 +189,19 @@ export async function dispatchApiRequest(
       return { status: 200, body: { run } };
     }
 
+    if (route.startsWith('/api/runs/') && route.endsWith('/cancel') && method === 'POST') {
+      const encodedCaseId = route.slice('/api/runs/'.length, route.length - '/cancel'.length);
+      const caseId = validateCaseId(decodeURIComponent(encodedCaseId));
+      const cancelled = context.runner.cancelRun(caseId);
+      return { status: 202, body: cancelled };
+    }
+
     if (route === '/api/runs/preview' && method === 'POST') {
-      const params = validateRunParams(request.body, { defaultOutDir: context.outDir });
+      const params = validateRunParams(request.body, {
+        defaultOutDir: context.outDir,
+        rootDir: context.rootDir,
+        allowedOfflineInputRoots: context.offlineInputRoots,
+      });
       const preview = context.runner.previewRun(params);
       return { status: 200, body: { preview } };
     }
@@ -194,6 +231,9 @@ export async function dispatchApiRequest(
     if (route.startsWith('/api/cases/') && method === 'DELETE') {
       const encodedCaseId = route.slice('/api/cases/'.length);
       const caseId = validateCaseId(decodeURIComponent(encodedCaseId));
+      if (context.runner.isCaseActive(caseId)) {
+        throw new RunnerError(`Cannot delete case ${caseId} while run is active`, 409);
+      }
       await deleteCase(context.outDir, caseId);
       return { status: 200, body: { deleted: true, case_id: caseId } };
     }
@@ -290,9 +330,32 @@ function resolveRequestId(req: IncomingMessage): string {
   return randomUUID();
 }
 
+function sanitizeClientKey(value: string | undefined): string {
+  const trimmed = (value ?? '').trim();
+  if (!trimmed) return 'unknown';
+  return trimmed.slice(0, 128).replace(/[^a-zA-Z0-9:._-]/g, '?');
+}
+
+function resolveDefaultClientKey(req: IncomingMessage): string {
+  const forwardedFor = req.headers['x-forwarded-for'];
+  const headerValue = Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor;
+  if (typeof headerValue === 'string' && headerValue.trim().length > 0) {
+    const first = headerValue.split(',')[0]?.trim();
+    return sanitizeClientKey(first);
+  }
+  const remoteAddress = req.socket?.remoteAddress;
+  if (typeof remoteAddress === 'string' && remoteAddress.trim().length > 0) {
+    return sanitizeClientKey(remoteAddress);
+  }
+  return 'unknown';
+}
+
 function normalizeRouteKey(pathname: string): string {
   const route = normalizeApiPath(pathname);
   if (!route) return pathname;
+  if (route.startsWith('/api/runs/') && route.endsWith('/cancel')) {
+    return '/api/runs/:caseId/cancel';
+  }
   if (route.startsWith('/api/cases/')) return '/api/cases/:caseId';
   if (route.startsWith('/api/alerts/') && route.endsWith('/bundle')) {
     return '/api/alerts/:alertId/bundle';
@@ -348,6 +411,7 @@ export function createTriageApiMiddleware(options: MiddlewareOptions = {}) {
   const rateLimitMaxRequests = options.rateLimitMaxRequests ?? DEFAULT_RATE_LIMIT_MAX_REQUESTS;
   const rateLimitWindowMs = options.rateLimitWindowMs ?? DEFAULT_RATE_LIMIT_WINDOW_MS;
   const now = options.now ?? Date.now;
+  const resolveClientKey = options.clientKeyResolver ?? resolveDefaultClientKey;
 
   return (req: IncomingMessage, res: ServerResponse, next: () => void): void => {
     if (!req.url) {
@@ -363,6 +427,8 @@ export function createTriageApiMiddleware(options: MiddlewareOptions = {}) {
 
     const method = (req.method || 'GET').toUpperCase();
     const routeKey = normalizeRouteKey(pathName);
+    const clientKey = sanitizeClientKey(resolveClientKey(req));
+    const rateLimitKey = `${routeKey}::${clientKey}`;
     const requestId = resolveRequestId(req);
     const startedAtMs = now();
     res.setHeader('X-Request-Id', requestId);
@@ -372,6 +438,7 @@ export function createTriageApiMiddleware(options: MiddlewareOptions = {}) {
         ts: new Date().toISOString(),
         event: 'api_request',
         request_id: requestId,
+        client_key: clientKey,
         method,
         route: routeKey,
         path: pathName,
@@ -383,7 +450,7 @@ export function createTriageApiMiddleware(options: MiddlewareOptions = {}) {
 
     const nowMs = now();
     pruneRateLimitBuckets(rateLimitBuckets, nowMs, rateLimitWindowMs);
-    const limit = consumeRateLimit(rateLimitBuckets, routeKey, nowMs, rateLimitMaxRequests, rateLimitWindowMs);
+    const limit = consumeRateLimit(rateLimitBuckets, rateLimitKey, nowMs, rateLimitMaxRequests, rateLimitWindowMs);
     if (!limit.allowed) {
       if (limit.retryAfterSeconds) {
         res.setHeader('Retry-After', String(limit.retryAfterSeconds));
@@ -402,7 +469,12 @@ export function createTriageApiMiddleware(options: MiddlewareOptions = {}) {
       }
       const response = await dispatchApiRequest(
         { method, url: req.url || '/', body },
-        { rootDir: context.rootDir, outDir: context.outDir, runner: context.runner },
+        {
+          rootDir: context.rootDir,
+          outDir: context.outDir,
+          offlineInputRoots: context.offlineInputRoots,
+          runner: context.runner,
+        },
       );
       if (!response) {
         next();

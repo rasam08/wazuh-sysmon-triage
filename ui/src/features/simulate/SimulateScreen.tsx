@@ -396,7 +396,7 @@ function ScenarioDetail({
             <ul className="space-y-1">
               {scenario.telemetry_highlights.map((item, idx) => (
                 <li key={idx} className="text-xs text-gray-400 flex items-start gap-1.5">
-                  <span className="text-blue-400 mt-0.5 text-[10px]">*</span>
+                  <span className="text-sky-400 mt-0.5 text-[10px]">*</span>
                   <span className="font-mono">{item}</span>
                 </li>
               ))}

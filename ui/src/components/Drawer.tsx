@@ -1,5 +1,17 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
+function IcoExpand({ expanded }: { expanded: boolean }) {
+  return expanded ? (
+    <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.6" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M10 2h4v4M6 14H2v-4M2 6V2h4M14 10v4h-4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ) : (
+    <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.6" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 interface DrawerProps {
   open: boolean;
   onClose: () => void;
@@ -55,6 +67,7 @@ export function Drawer({ open, onClose, title, width = 'w-[520px]', children }: 
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const [visible, setVisible] = useState(false);
   const [closing, setClosing] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   useFocusTrap(panelRef, open);
 
@@ -91,6 +104,8 @@ export function Drawer({ open, onClose, title, width = 'w-[520px]', children }: 
 
   if (!visible) return null;
 
+  const effectiveWidth = expanded ? 'w-[90vw] max-w-[1200px]' : width;
+
   return (
     <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label={title ?? 'Details'}>
       {/* Backdrop */}
@@ -102,20 +117,30 @@ export function Drawer({ open, onClose, title, width = 'w-[520px]', children }: 
       {/* Panel */}
       <div
         ref={panelRef}
-        className={`relative ${width} max-w-full bg-gray-900 border-l border-gray-800 shadow-2xl flex flex-col`}
+        className={`relative ${effectiveWidth} max-w-full bg-gray-900 border-l border-gray-800 shadow-2xl flex flex-col transition-[width] duration-150`}
         style={{ animation: `${closing ? 'slideOut' : 'slideIn'} 200ms ease-out forwards` }}
         onAnimationEnd={handleAnimationEnd}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
           <h2 className="text-sm font-semibold text-gray-200 truncate">{title ?? 'Details'}</h2>
-          <button
-            onClick={onClose}
-            className="text-gray-500 hover:text-gray-300 text-lg leading-none p-1"
-            aria-label="Close drawer"
-          >
-            x
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setExpanded((e) => !e)}
+              className="text-gray-500 hover:text-gray-300 p-1.5 rounded hover:bg-gray-800 transition-colors"
+              aria-label={expanded ? 'Collapse to drawer' : 'Expand to full panel'}
+              title={expanded ? 'Collapse to drawer' : 'Expand to full panel'}
+            >
+              <IcoExpand expanded={expanded} />
+            </button>
+            <button
+              onClick={onClose}
+              className="text-gray-500 hover:text-gray-300 p-1.5 rounded hover:bg-gray-800 text-lg leading-none transition-colors"
+              aria-label="Close drawer"
+            >
+              ×
+            </button>
+          </div>
         </div>
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-4">{children}</div>

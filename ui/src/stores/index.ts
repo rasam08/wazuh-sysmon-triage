@@ -72,6 +72,7 @@ interface RunsState {
   fetchRuns: () => Promise<void>;
   selectRun: (id: string | null) => void;
   startRun: (params: RunParams) => Promise<string>;
+  cancelRun: (caseId: string) => Promise<void>;
 }
 
 export const useRunsStore = create<RunsState>((set, get) => ({
@@ -128,6 +129,26 @@ export const useRunsStore = create<RunsState>((set, get) => ({
         selectedRunId: failed.id,
       }));
       throw e;
+    }
+  },
+
+  cancelRun: async (caseId: string) => {
+    try {
+      await api.cancelRun(caseId);
+      set((s) => ({
+        runs: s.runs.map((run) => {
+          if (run.params.case_id !== caseId) return run;
+          return {
+            ...run,
+            status: run.status === 'running' ? 'failed' : run.status,
+            current_stage: undefined,
+            error: run.error ?? `Run ${caseId} cancelled by user`,
+            completed_at: run.completed_at ?? new Date().toISOString(),
+          };
+        }),
+      }));
+    } finally {
+      await get().fetchRuns();
     }
   },
 }));
@@ -273,17 +294,18 @@ export interface Toast {
   id: string;
   type: 'success' | 'error' | 'info';
   message: string;
+  duration?: number;
 }
 
 interface ToastState {
   toasts: Toast[];
-  addToast: (type: Toast['type'], message: string) => void;
+  addToast: (type: Toast['type'], message: string, duration?: number) => void;
   removeToast: (id: string) => void;
 }
 
 export const useToastStore = create<ToastState>((set) => ({
   toasts: [],
-  addToast: (type, message) => {
+  addToast: (type, message, duration?: number) => {
     const notificationSettings = useSettingsStore.getState().notifications;
     if (type === 'success' && !notificationSettings.show_success_toasts) return;
     if (type === 'info' && !notificationSettings.show_info_toasts) return;
@@ -325,7 +347,7 @@ export const useToastStore = create<ToastState>((set) => ({
 
     setTimeout(() => {
       set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
-    }, Math.max(500, notificationSettings.toast_duration_ms));
+    }, duration ?? Math.max(500, notificationSettings.toast_duration_ms));
   },
   removeToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
 }));
@@ -342,6 +364,7 @@ export interface AlertNote {
 export interface AlertAnnotation {
   false_positive: boolean;
   escalated: boolean;
+  pinned: boolean;
   notes: AlertNote[];
 }
 
@@ -350,13 +373,15 @@ interface AlertAnnotationsState {
   getAnnotation: (alertId: string) => AlertAnnotation;
   toggleFalsePositive: (alertId: string) => void;
   toggleEscalated: (alertId: string) => void;
+  togglePinned: (alertId: string) => void;
   addNote: (alertId: string, text: string) => void;
   removeNote: (alertId: string, noteId: string) => void;
   isFalsePositive: (alertId: string) => boolean;
   isEscalated: (alertId: string) => boolean;
+  isPinned: (alertId: string) => boolean;
 }
 
-const EMPTY_ANNOTATION: AlertAnnotation = { false_positive: false, escalated: false, notes: [] };
+const EMPTY_ANNOTATION: AlertAnnotation = { false_positive: false, escalated: false, pinned: false, notes: [] };
 
 export const useAlertAnnotationsStore = create<AlertAnnotationsState>()(
   persist(
@@ -383,6 +408,17 @@ export const useAlertAnnotationsStore = create<AlertAnnotationsState>()(
             annotations: {
               ...s.annotations,
               [alertId]: { ...current, escalated: !current.escalated },
+            },
+          };
+        }),
+
+      togglePinned: (alertId) =>
+        set((s) => {
+          const current = s.annotations[alertId] ?? { ...EMPTY_ANNOTATION };
+          return {
+            annotations: {
+              ...s.annotations,
+              [alertId]: { ...current, pinned: !current.pinned },
             },
           };
         }),
@@ -420,6 +456,7 @@ export const useAlertAnnotationsStore = create<AlertAnnotationsState>()(
 
       isFalsePositive: (alertId) => get().annotations[alertId]?.false_positive ?? false,
       isEscalated: (alertId) => get().annotations[alertId]?.escalated ?? false,
+      isPinned: (alertId) => get().annotations[alertId]?.pinned ?? false,
     }),
     { name: 'wst-alert-annotations' },
   ),

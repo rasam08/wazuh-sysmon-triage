@@ -53,7 +53,8 @@ describe('ScoreBadge', () => {
 
   it('uses danger for high scores', () => {
     render(<ScoreBadge score={85} />);
-    expect(screen.getByText('85').className).toContain('red');
+    const wrapper = screen.getByText('85').closest('span[title]')!;
+    expect(wrapper.className).toContain('red');
   });
 });
 

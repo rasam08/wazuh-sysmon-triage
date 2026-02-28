@@ -19,18 +19,20 @@ Run with persistent output and common runtime environment variables:
 docker run --rm -p 4173:4173 \
   -v "$(pwd)/out:/app/out" \
   -e PORT=4173 \
+  -e PUBLIC_BIND=true \
+  -e BIND_HOST=0.0.0.0 \
+  -e AUTH_USER=analyst \
+  -e AUTH_PASS=changeme \
   -e WAZUH_OS_HOST=https://indexer:9200 \
   -e WAZUH_OS_USER=admin \
   -e WAZUH_OS_PASSWORD=changeme \
   -e WAZUH_OS_VERIFY_TLS=true \
-  -e AUTH_USER= \
-  -e AUTH_PASS= \
   wazuh-triage
 ```
 
 Notes:
 
-- `AUTH_USER` and `AUTH_PASS` are optional. If both are set, HTTP Basic Auth is enabled on the UI/API server.
+- Server defaults to loopback bind (`127.0.0.1`). For container or remote access, set `PUBLIC_BIND=true` and provide non-empty `AUTH_USER`/`AUTH_PASS`.
 - Container output artifacts are written under `/app/out`, mapped above to local `./out`.
 
 ## Docker Compose
@@ -46,6 +48,8 @@ Use a `.env` file in the repo root for compose variable expansion:
 ```dotenv
 AUTH_USER=analyst
 AUTH_PASS=changeme
+PUBLIC_BIND=true
+BIND_HOST=0.0.0.0
 ```
 
 Override auth at runtime without editing compose:

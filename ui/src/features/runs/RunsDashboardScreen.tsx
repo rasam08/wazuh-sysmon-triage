@@ -1,14 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useRunsStore, useToastStore, useSettingsStore } from '@/stores';
-import { Button, Card, StatusBadge, EmptyState, LoadingSpinner, ErrorPanel } from '@/components';
+import { Button, Card, StatusBadge, EmptyState, LoadingSpinner, ErrorPanel, SkeletonCard, SkeletonTable } from '@/components';
 import { exportRunLogs, copyToClipboard } from '@/utils/exports';
 import { formatDateTime } from '@/utils/datetime';
 
 export default function RunsDashboardScreen() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { runs, loading, fetchRuns, selectRun, selectedRunId } = useRunsStore();
+  const { runs, loading, fetchRuns, selectRun, selectedRunId, cancelRun } = useRunsStore();
   const addToast = useToastStore((s) => s.addToast);
   const monospaceCommands = useSettingsStore((s) => s.display.monospace_commands);
   const dateFormat = useSettingsStore((s) => s.display.date_format);
@@ -16,6 +16,7 @@ export default function RunsDashboardScreen() {
   const [filterStatus, setFilterStatus] = useState('');
   const [filterMode, setFilterMode] = useState('');
   const [searchText, setSearchText] = useState('');
+  const [cancelingCaseId, setCancelingCaseId] = useState<string | null>(null);
 
   useEffect(() => {
     void fetchRuns();
@@ -37,7 +38,15 @@ export default function RunsDashboardScreen() {
 
   const selectedRun = useMemo(() => runs.find((run) => run.id === selectedRunId), [runs, selectedRunId]);
 
-  if (loading && !runs.length) return <LoadingSpinner label="Loading runs..." />;
+  if (loading && !runs.length) return (
+    <div className="flex gap-4 h-[calc(100vh-8rem)] animate-fade-in-up">
+      <div className="w-80 flex-shrink-0"><SkeletonTable rows={6} cols={1} /></div>
+      <div className="flex-1 space-y-4">
+        <SkeletonCard />
+        <SkeletonCard />
+      </div>
+    </div>
+  );
 
   if (!runs.length) {
     return (
@@ -171,6 +180,28 @@ export default function RunsDashboardScreen() {
             )}
 
             <div className="flex flex-wrap gap-2">
+              {selectedRun.status === 'running' && (
+                <Button
+                  size="sm"
+                  variant="danger"
+                  disabled={cancelingCaseId === selectedRun.params.case_id}
+                  onClick={async () => {
+                    const caseId = selectedRun.params.case_id;
+                    setCancelingCaseId(caseId);
+                    try {
+                      await cancelRun(caseId);
+                      addToast('info', `Cancellation requested for ${caseId}`);
+                    } catch (error) {
+                      const message = error instanceof Error ? error.message : 'Cancellation failed';
+                      addToast('error', message);
+                    } finally {
+                      setCancelingCaseId((current) => (current === caseId ? null : current));
+                    }
+                  }}
+                >
+                  {cancelingCaseId === selectedRun.params.case_id ? 'Canceling...' : 'Cancel Run'}
+                </Button>
+              )}
               <Button size="sm" onClick={() => navigate(`/cases/${selectedRun.params.case_id}`)}>
                 Open Case
               </Button>

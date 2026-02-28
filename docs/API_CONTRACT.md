@@ -19,8 +19,10 @@ Common statuses:
 
 - `400` invalid JSON/params/case id
 - `404` case/bundle/route not found
-- `409` run conflict (already running, overwrite denied)
+- `408` run timeout
+- `409` run conflict (already running, overwrite denied, active-case delete blocked)
 - `413` artifact too large
+- `429` middleware rate limit
 - `500` internal execution/read failure
 
 ## Types (high level)
@@ -35,6 +37,7 @@ Common statuses:
   - `dry_run`, `alerts_only`, `print_stats`, optional `verify_tls`
     - when omitted, CLI resolves TLS mode from env/profile defaults
   - `allow_overwrite`, `force`
+  - `input_file` (offline only): must be a relative path under middleware-allowed offline roots
 
 `out_dir` is normalized to the middleware-configured output root (server-owned boundary).
 
@@ -63,6 +66,7 @@ Unknown fields are ignored and never forwarded to spawn.
 Behavior:
 
 - validates/coerces params
+- enforces offline input path boundary (no absolute/traversal; allowed roots only)
 - enforces run mutex
 - enforces overwrite policy
 - spawns `python -m wazuh_sysmon_triage ...`
@@ -71,6 +75,16 @@ Response:
 
 ```json
 { "run": Run }
+```
+
+### `POST /api/runs/:caseId/cancel`
+
+Requests cancellation of an active run for `caseId`.
+
+Response:
+
+```json
+{ "cancelled": true, "case_id": "...", "reason": "user" }
 ```
 
 ### `POST /api/runs/preview`
@@ -105,6 +119,7 @@ Response:
 ### `DELETE /api/cases/:caseId`
 
 Deletes the case directory and all case artifacts from the middleware output root.
+If the target case has an active run, delete is blocked with `409`.
 
 Response:
 

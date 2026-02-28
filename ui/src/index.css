@@ -1,5 +1,19 @@
 @import "tailwindcss";
 
+/* ─── Dark charcoal color scale ─── */
+@theme {
+  --color-gray-950: #0c0e12;
+  --color-gray-900: #13151c;
+  --color-gray-800: #1c1f27;
+  --color-gray-700: #252830;
+  --color-gray-600: #343742;
+  --color-gray-500: #4b4f61;
+  --color-gray-400: #696d82;
+  --color-gray-300: #9295aa;
+  --color-gray-200: #bec1d0;
+  --color-gray-100: #dfe0e9;
+}
+
 /* SOC dashboard theme overrides */
 :root {
   --color-severity-critical: #ef4444;
@@ -10,10 +24,10 @@
   --color-confidence-high: #ef4444;
   --color-confidence-medium: #eab308;
   --color-confidence-low: #6b7280;
-  --color-surface-0: #030712;
-  --color-surface-1: #0f1729;
-  --color-surface-2: #1a2332;
-  --color-border: #1e2d3d;
+  --color-surface-0: #111318;
+  --color-surface-1: #161920;
+  --color-surface-2: #1c1f28;
+  --color-border: #252830;
   color-scheme: dark;
 }
 
@@ -60,11 +74,11 @@ button:focus-visible {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #374151;
+  background: #32363f;
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #4b5563;
+  background: #4b4f61;
 }
 
 /* ─── Drawer & modal animations ─── */
@@ -83,6 +97,78 @@ button:focus-visible {
   transition: transform 150ms ease-in;
 }
 
+/* ─── Toast slide-in / slide-out ─── */
+@keyframes toast-enter {
+  0% { opacity: 0; transform: translateX(100%) scale(0.95); }
+  100% { opacity: 1; transform: translateX(0) scale(1); }
+}
+@keyframes toast-exit {
+  0% { opacity: 1; transform: translateX(0) scale(1); }
+  100% { opacity: 0; transform: translateX(100%) scale(0.95); }
+}
+.toast-enter   { animation: toast-enter 250ms cubic-bezier(0.22,1,0.36,1) both; }
+.toast-exit    { animation: toast-exit  180ms cubic-bezier(0.55,0,1,0.45) both; }
+
+/* ─── Skeleton shimmer ─── */
+@keyframes skeleton-shimmer {
+  0%   { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    #1c1f27 0%,
+    #252830 35%,
+    #1c1f27 70%,
+    #1c1f27 100%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.6s ease-in-out infinite;
+  border-radius: 0.375rem;
+}
+
+:root[data-theme="light"] .skeleton {
+  background: linear-gradient(
+    90deg,
+    #e9eef6 0%,
+    #f4f7fb 35%,
+    #e9eef6 70%,
+    #e9eef6 100%
+  );
+  background-size: 200% 100%;
+}
+
+/* ─── Global progress bar ─── */
+@keyframes progress-indeterminate {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+.progress-bar-indeterminate {
+  animation: progress-indeterminate 1.4s cubic-bezier(0.65,0,0.35,1) infinite;
+}
+
+/* ─── Success checkmark ─── */
+@keyframes check-pop {
+  0%   { transform: scale(0); opacity: 0; }
+  50%  { transform: scale(1.2); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+.check-pop { animation: check-pop 350ms cubic-bezier(0.22,1,0.36,1) both; }
+
+/* ─── Fade in ─── */
+@keyframes fade-in-up {
+  0%   { opacity: 0; transform: translateY(8px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in-up { animation: fade-in-up 300ms ease-out both; }
+
+/* ─── Notification badge pulse ─── */
+@keyframes badge-pulse {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.15); }
+}
+.badge-pulse { animation: badge-pulse 2s ease-in-out infinite; }
+
 /* ─── Smooth selection highlight ─── */
 ::selection {
   background-color: rgba(59, 130, 246, 0.3);
@@ -94,7 +180,7 @@ input:-webkit-autofill,
 input:-webkit-autofill:hover,
 input:-webkit-autofill:focus {
   -webkit-text-fill-color: #e5e7eb;
-  -webkit-box-shadow: 0 0 0 1000px #1f2937 inset;
+  -webkit-box-shadow: 0 0 0 1000px #1c1f27 inset;
   transition: background-color 5000s ease-in-out 0s;
 }
 
