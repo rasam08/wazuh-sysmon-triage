@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+SENSITIVE_KEYS = {"authorization", "password", "pass", "token", "api_key", "apikey", "secret"}
+
 
 class JsonLineFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
@@ -31,38 +33,40 @@ class JsonLineFormatter(logging.Formatter):
         return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
 
 
+def _redact_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return _redact_sensitive(value)
+    if isinstance(value, list):
+        return [_redact_value(item) for item in value]
+    return value
+
+
 def _redact_sensitive(data: dict[str, Any]) -> dict[str, Any]:
     redacted: dict[str, Any] = {}
     for key, value in data.items():
-        if key.lower() in {"authorization", "password", "pass"}:
+        if key.lower() in SENSITIVE_KEYS:
             redacted[key] = "[REDACTED]"
-        elif isinstance(value, dict):
-            nested = {}
-            for nested_key, nested_value in value.items():
-                if nested_key.lower() == "authorization":
-                    nested[nested_key] = "[REDACTED]"
-                else:
-                    nested[nested_key] = nested_value
-            redacted[key] = nested
         else:
-            redacted[key] = value
+            redacted[key] = _redact_value(value)
     return redacted
 
 
-def setup_logging(level: str = "INFO", json: bool = True, out_path: Path | None = None) -> None:
+def setup_logging(
+    level: str = "INFO", json_format: bool = True, out_path: Path | None = None
+) -> None:
     """
     Set up structured NDJSON logging.
 
     Args:
         level (str): Logging level.
-        json (bool): Emit JSON lines when True.
+        json_format (bool): Emit JSON lines when True.
         out_path (Path | None): Optional file sink path (append).
     """
     root = logging.getLogger()
     root.setLevel(level)
     root.handlers.clear()
 
-    if json:
+    if json_format:
         formatter: logging.Formatter = JsonLineFormatter()
     else:
         formatter = logging.Formatter("%(levelname)s %(name)s %(message)s")

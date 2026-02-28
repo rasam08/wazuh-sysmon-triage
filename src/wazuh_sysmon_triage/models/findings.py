@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -90,7 +90,7 @@ class Artifact(BaseModel):
 
     kind: str = "artifact"
 
-    class Confidence(str, Enum):
+    class Confidence(StrEnum):
         HIGH = "HIGH"
         MEDIUM = "MEDIUM"
         LOW = "LOW"
@@ -136,6 +136,7 @@ class IncidentSummary(BaseModel):
     kind: str = "incident_summary"
     time_range: tuple[datetime, datetime]
     agent: str | None = None
+    agent_id: str | None = None
     key_processes: list[ProcessNode] = Field(default_factory=list)
     artifacts: list[Artifact] = Field(default_factory=list)
     mitre: list[str] = Field(default_factory=list)
@@ -151,6 +152,7 @@ class IncidentSummary(BaseModel):
         raise TypeError("time_range must be a 2-item list or tuple")
 
     _coerce_agent = field_validator("agent", mode="before")(_to_optional_str)
+    _coerce_agent_id = field_validator("agent_id", mode="before")(_to_optional_str)
 
     @field_validator("mitre", mode="before")
     @classmethod

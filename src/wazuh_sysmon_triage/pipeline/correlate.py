@@ -6,6 +6,7 @@ from collections import defaultdict
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from importlib import resources
+from typing import Any
 
 import yaml
 
@@ -36,8 +37,18 @@ SUSPICIOUS_PATH_MARKERS = [
 
 COMMON_PORTS = {80, 443, 53, 123, 445, 3389, 22, 25}
 
+LOW_SIGNAL_DEFENDER_BASENAMES = {
+    "msmpeng.exe",
+    "mpcmdrun.exe",
+    "nissrv.exe",
+    "mpdefendercoreservice.exe",
+}
 
-def _load_sigma_rules() -> list[dict]:
+GUID_EDGE_REASON = "SysmonEID1 parentProcessGuid -> processGuid"
+HEURISTIC_EDGE_REASON = "Heuristic: pid/time proximity (no parentProcessGuid)"
+
+
+def _load_sigma_rules() -> list[dict[str, Any]]:
     with (
         resources.files("wazuh_sysmon_triage.data")
         .joinpath("sigma_rules.yaml")
@@ -51,7 +62,7 @@ def _load_sigma_rules() -> list[dict]:
     return rules
 
 
-def _match_sigma(rule: dict, image: str | None, command_line: str | None) -> bool:
+def _match_sigma(rule: dict[str, Any], image: str | None, command_line: str | None) -> bool:
     match = rule.get("match", {})
     if "image" in match:
         if _basename(image) != str(match["image"]).lower():
@@ -85,6 +96,10 @@ def _norm_path(path: str | None) -> str:
     return path.lower()
 
 
+def _is_defender_low_signal(image: str | None, destination_port: int) -> bool:
+    return _basename(image) in LOW_SIGNAL_DEFENDER_BASENAMES and destination_port == 443
+
+
 def _is_interpreter(image: str | None, command_line: str | None) -> bool:
     image_base = _basename(image)
     if image_base in SCRIPT_INTERPRETERS:
@@ -106,7 +121,11 @@ def _is_script_write(target: str | None) -> bool:
     return any(marker in target_lower for marker in SUSPICIOUS_PATH_MARKERS)
 
 
-def correlate_data(events: Iterable[SysmonEvent]) -> dict:
+def correlate_data(
+    events: Iterable[SysmonEvent],
+    *,
+    destination_scoring_mode: str = "balanced",
+) -> dict[str, Any]:
     """
     Build process graph, artifacts, and an incident summary from Sysmon events.
     """
@@ -114,13 +133,15 @@ def correlate_data(events: Iterable[SysmonEvent]) -> dict:
     nodes_by_guid: dict[str, ProcessNode] = {}
     edges: list[ProcessEdge] = []
     artifacts: list[Artifact] = []
-    network_activity: list[dict] = []
+    network_activity: list[dict[str, Any]] = []
     out_degree: defaultdict[str, int] = defaultdict(int)
     artifact_links: defaultdict[str, int] = defaultdict(int)
     first_ts: datetime | None = None
     last_ts: datetime | None = None
     narrative: list[str] = []
     sigma_rules = _load_sigma_rules()
+    pending_guid_edges: list[tuple[str, str]] = []
+    pending_pid_edges: list[tuple[str, str]] = []
 
     for event in event_list:
         if first_ts is None or event.timestamp < first_ts:
@@ -160,23 +181,10 @@ def correlate_data(events: Iterable[SysmonEvent]) -> dict:
                         if tag not in node.tags:
                             node.tags.append(tag)
 
-            if event.parent_process_guid and event.parent_process_guid in nodes_by_guid:
-                edges.append(
-                    ProcessEdge(
-                        parent_guid=event.parent_process_guid,
-                        child_guid=guid,
-                        reason="SysmonEID1 parentProcessGuid -> processGuid",
-                    )
-                )
-                out_degree[event.parent_process_guid] += 1
+            if event.parent_process_guid:
+                pending_guid_edges.append((event.parent_process_guid, guid))
             elif event.parent_process_id:
-                edges.append(
-                    ProcessEdge(
-                        parent_guid=f"pid:{event.parent_process_id}",
-                        child_guid=guid,
-                        reason="Heuristic: pid/time proximity (no parentProcessGuid)",
-                    )
-                )
+                pending_pid_edges.append((f"pid:{event.parent_process_id}", guid))
 
         if isinstance(event, FileCreateEvent):
             creator = nodes_by_guid.get(event.process_guid)
@@ -230,12 +238,32 @@ def correlate_data(events: Iterable[SysmonEvent]) -> dict:
 
             suspicious = False
             reasons: list[str] = []
-            if _is_public_ip(event.destination_ip):
-                suspicious = True
-                reasons.append("public_ip")
-            if event.destination_port not in COMMON_PORTS:
-                suspicious = True
-                reasons.append("uncommon_port")
+            is_public = _is_public_ip(event.destination_ip)
+            uncommon_port = event.destination_port not in COMMON_PORTS
+            defender_low_signal = _is_defender_low_signal(event.image, event.destination_port)
+
+            if destination_scoring_mode == "lab":
+                if is_public:
+                    suspicious = True
+                    reasons.append("public_ip")
+                if uncommon_port:
+                    suspicious = True
+                    reasons.append("uncommon_port")
+            elif destination_scoring_mode == "strict":
+                if is_public and uncommon_port and not defender_low_signal:
+                    suspicious = True
+                    reasons.extend(["public_ip", "uncommon_port"])
+            else:
+                if is_public and uncommon_port and not defender_low_signal:
+                    suspicious = True
+                    reasons.extend(["public_ip", "uncommon_port"])
+                elif (
+                    is_public
+                    and not defender_low_signal
+                    and event.destination_port not in {80, 443}
+                ):
+                    suspicious = True
+                    reasons.append("public_ip")
 
             network_activity.append(
                 {
@@ -245,10 +273,47 @@ def correlate_data(events: Iterable[SysmonEvent]) -> dict:
                     "destination_ip": event.destination_ip,
                     "destination_port": event.destination_port,
                     "protocol": event.protocol,
+                    "destination_class": "public" if is_public else "private",
                     "suspicious": suspicious,
                     "reason": ",".join(reasons) if reasons else "",
+                    "low_signal": defender_low_signal,
                 }
             )
+
+    edge_keys: set[tuple[str, str]] = set()
+    for parent_guid, child_guid in pending_guid_edges:
+        if parent_guid not in nodes_by_guid:
+            continue
+        edge_key = (parent_guid, child_guid)
+        if edge_key in edge_keys:
+            continue
+        edges.append(
+            ProcessEdge(
+                parent_guid=parent_guid,
+                child_guid=child_guid,
+                reason=GUID_EDGE_REASON,
+            )
+        )
+        edge_keys.add(edge_key)
+        out_degree[parent_guid] += 1
+
+    children_with_guid_parent = {
+        edge.child_guid for edge in edges if edge.reason == GUID_EDGE_REASON
+    }
+    for parent_guid, child_guid in pending_pid_edges:
+        if child_guid in children_with_guid_parent:
+            continue
+        edge_key = (parent_guid, child_guid)
+        if edge_key in edge_keys:
+            continue
+        edges.append(
+            ProcessEdge(
+                parent_guid=parent_guid,
+                child_guid=child_guid,
+                reason=HEURISTIC_EDGE_REASON,
+            )
+        )
+        edge_keys.add(edge_key)
 
     if first_ts and last_ts:
         narrative.insert(0, f"First event at {first_ts.isoformat()}")
@@ -290,6 +355,7 @@ def correlate_data(events: Iterable[SysmonEvent]) -> dict:
             datetime.now(tz=UTC),
         ),
         agent=event_list[0].agent_name if event_list else None,
+        agent_id=event_list[0].agent_id if event_list else None,
         key_processes=key_processes,
         artifacts=artifacts,
         mitre=[],

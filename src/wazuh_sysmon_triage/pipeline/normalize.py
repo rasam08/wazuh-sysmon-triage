@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -14,6 +15,15 @@ from wazuh_sysmon_triage.models.sysmon import (
 )
 
 LOGGER = logging.getLogger(__name__)
+
+
+@dataclass
+class NormalizeReport:
+    dropped_count: int = 0
+    dropped_by_reason: dict[str, int] = field(default_factory=dict)
+    invalid_timestamp_count: int = 0
+    invalid_timestamp_by_eid: dict[str, int] = field(default_factory=dict)
+    dropped_events: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _to_int(value: Any) -> int | None:
@@ -33,12 +43,18 @@ def _parse_dt(value: Any) -> datetime | None:
             return value.replace(tzinfo=UTC)
         return value.astimezone(UTC)
     if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(value, tz=UTC)
+        try:
+            return datetime.fromtimestamp(value, tz=UTC)
+        except (OverflowError, OSError, ValueError):
+            return None
     if isinstance(value, str):
         text = value.strip()
         if text.endswith("Z"):
             text = text[:-1] + "+00:00"
-        parsed = datetime.fromisoformat(text)
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            return None
         if parsed.tzinfo is None:
             return parsed.replace(tzinfo=UTC)
         return parsed.astimezone(UTC)
@@ -74,11 +90,71 @@ def _normalize_mitre(value: Any) -> list[str]:
     return [str(item) for item in value]
 
 
+def _timestamp_parse_status(value: Any) -> tuple[datetime | None, str]:
+    if value is None:
+        return None, "missing"
+    parsed = _parse_dt(value)
+    if parsed is None:
+        return None, "invalid"
+    return parsed, "ok"
+
+
+def _missing_fields(
+    values: dict[str, Any],
+) -> list[str]:
+    missing: list[str] = []
+    for name, value in values.items():
+        if value is None or value == "":
+            missing.append(name)
+    return missing
+
+
+def _record_drop(
+    report: NormalizeReport,
+    *,
+    reason: str,
+    event_id: int | None,
+    hit: RawHit,
+    collect_dropped: bool,
+    details: dict[str, Any] | None = None,
+) -> None:
+    report.dropped_count += 1
+    report.dropped_by_reason[reason] = report.dropped_by_reason.get(reason, 0) + 1
+    if reason == "invalid_timestamp":
+        report.invalid_timestamp_count += 1
+        eid_key = str(event_id) if event_id is not None else "unknown"
+        report.invalid_timestamp_by_eid[eid_key] = (
+            report.invalid_timestamp_by_eid.get(eid_key, 0) + 1
+        )
+    if collect_dropped:
+        report.dropped_events.append(
+            {
+                "reason": reason,
+                "event_id": event_id,
+                "details": details or {},
+                "raw_hit": hit,
+            }
+        )
+
+
 def normalize_data(raw_data: Iterable[RawHit]) -> list[SysmonEvent]:
     """
     Normalize raw OpenSearch hits into SysmonEvent models.
     """
+    normalized, _ = normalize_data_with_report(raw_data, collect_dropped=False)
+    return normalized
+
+
+def normalize_data_with_report(
+    raw_data: Iterable[RawHit],
+    *,
+    collect_dropped: bool = False,
+) -> tuple[list[SysmonEvent], NormalizeReport]:
+    """
+    Normalize raw OpenSearch hits into SysmonEvent models and collect drop metrics.
+    """
     normalized: list[SysmonEvent] = []
+    report = NormalizeReport()
 
     for hit in raw_data:
         source = hit.get("_source") or {}
@@ -93,11 +169,35 @@ def normalize_data(raw_data: Iterable[RawHit]) -> list[SysmonEvent]:
         event_id = _to_int(event_id_raw)
         if event_id is None:
             LOGGER.warning("Dropping event missing eventID")
+            _record_drop(
+                report,
+                reason="missing_event_id",
+                event_id=None,
+                hit=hit,
+                collect_dropped=collect_dropped,
+            )
             continue
 
-        timestamp = _parse_dt(get_ci(eventdata, "utcTime")) or _parse_dt(source.get("@timestamp"))
+        utc_time_raw = get_ci(eventdata, "utcTime")
+        source_time_raw = source.get("@timestamp")
+        timestamp_utc, utc_status = _timestamp_parse_status(utc_time_raw)
+        timestamp_source, source_status = _timestamp_parse_status(source_time_raw)
+        timestamp = timestamp_utc or timestamp_source
         if not timestamp:
-            LOGGER.warning("Dropping event missing timestamp")
+            reason = (
+                "invalid_timestamp"
+                if utc_status == "invalid" or source_status == "invalid"
+                else "missing_timestamp"
+            )
+            LOGGER.warning("Dropping event missing or invalid timestamp")
+            _record_drop(
+                report,
+                reason=reason,
+                event_id=event_id,
+                hit=hit,
+                collect_dropped=collect_dropped,
+                details={"utcTime": utc_time_raw, "@timestamp": source_time_raw},
+            )
             continue
 
         common = {
@@ -118,9 +218,27 @@ def normalize_data(raw_data: Iterable[RawHit]) -> list[SysmonEvent]:
             process_guid = get_ci(eventdata, "processGuid")
             process_id = _to_int(get_ci(eventdata, "processId"))
             image = get_ci(eventdata, "image")
-            if not process_guid or process_id is None or not image:
+            missing = _missing_fields(
+                {
+                    "processGuid": process_guid,
+                    "processId": process_id,
+                    "image": image,
+                }
+            )
+            if missing:
                 LOGGER.warning("Dropping EID 1 missing required fields")
+                _record_drop(
+                    report,
+                    reason="missing_required_fields_eid1",
+                    event_id=event_id,
+                    hit=hit,
+                    collect_dropped=collect_dropped,
+                    details={"missing": missing},
+                )
                 continue
+            assert isinstance(process_guid, str)
+            assert process_id is not None
+            assert isinstance(image, str)
             normalized.append(
                 ProcessCreateEvent(
                     **common,
@@ -143,9 +261,29 @@ def normalize_data(raw_data: Iterable[RawHit]) -> list[SysmonEvent]:
             process_id = _to_int(get_ci(eventdata, "processId"))
             image = get_ci(eventdata, "image")
             target_filename = get_ci(eventdata, "targetFilename")
-            if not process_guid or process_id is None or not image or not target_filename:
+            missing = _missing_fields(
+                {
+                    "processGuid": process_guid,
+                    "processId": process_id,
+                    "image": image,
+                    "targetFilename": target_filename,
+                }
+            )
+            if missing:
                 LOGGER.warning("Dropping EID 11 missing required fields")
+                _record_drop(
+                    report,
+                    reason="missing_required_fields_eid11",
+                    event_id=event_id,
+                    hit=hit,
+                    collect_dropped=collect_dropped,
+                    details={"missing": missing},
+                )
                 continue
+            assert isinstance(process_guid, str)
+            assert process_id is not None
+            assert isinstance(image, str)
+            assert isinstance(target_filename, str)
             normalized.append(
                 FileCreateEvent(
                     **common,
@@ -164,15 +302,31 @@ def normalize_data(raw_data: Iterable[RawHit]) -> list[SysmonEvent]:
             dest_ip = get_ci(eventdata, "destinationIp")
             dest_port = _to_int(get_ci(eventdata, "destinationPort"))
             protocol = get_ci(eventdata, "protocol")
-            if (
-                not process_guid
-                or process_id is None
-                or not image
-                or not dest_ip
-                or dest_port is None
-            ):
+            missing = _missing_fields(
+                {
+                    "processGuid": process_guid,
+                    "processId": process_id,
+                    "image": image,
+                    "destinationIp": dest_ip,
+                    "destinationPort": dest_port,
+                }
+            )
+            if missing:
                 LOGGER.warning("Dropping EID 3 missing required fields")
+                _record_drop(
+                    report,
+                    reason="missing_required_fields_eid3",
+                    event_id=event_id,
+                    hit=hit,
+                    collect_dropped=collect_dropped,
+                    details={"missing": missing},
+                )
                 continue
+            assert isinstance(process_guid, str)
+            assert process_id is not None
+            assert isinstance(image, str)
+            assert isinstance(dest_ip, str)
+            assert dest_port is not None
             normalized.append(
                 NetworkConnectEvent(
                     **common,
@@ -187,4 +341,4 @@ def normalize_data(raw_data: Iterable[RawHit]) -> list[SysmonEvent]:
         else:
             continue
 
-    return sorted(normalized, key=lambda item: item.timestamp)
+    return sorted(normalized, key=lambda item: item.timestamp), report

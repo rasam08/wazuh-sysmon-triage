@@ -14,13 +14,16 @@ class RunContext:
     run_id: str = field(default_factory=lambda: str(uuid4()))
     case_id: str | None = None
     started_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
-    params: dict = field(default_factory=dict)
+    params: dict[str, object] = field(default_factory=dict)
 
 
 @contextmanager
 def timed(
-    stage: str, logger: logging.Logger, ctx: RunContext, extra: dict | None = None
-) -> Iterator[dict]:
+    stage: str,
+    logger: logging.Logger,
+    ctx: RunContext,
+    extra: dict[str, object] | None = None,
+) -> Iterator[dict[str, int]]:
     payload = dict(extra or {})
     logger.info(
         "Stage started",

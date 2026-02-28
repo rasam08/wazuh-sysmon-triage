@@ -25,14 +25,16 @@ Notes:
 From the repository root:
 
 ```powershell
-\.\.venv\Scripts\python.exe -m wazuh_sysmon_triage run --case-id INCIDENT-001 --input-ndjson samples/incident_001/raw_hits.ndjson --out-dir ./out --print-stats
+triage offline --input-ndjson samples/incident_001/raw_hits.ndjson --case-id INCIDENT-001 --print-stats
 ```
 
 Expected artifacts:
 
 - `out/INCIDENT-001/timeline.csv`
 - `out/INCIDENT-001/process_tree.json`
+- `out/INCIDENT-001/alerts.csv`
 - `out/INCIDENT-001/report.md`
+- `out/INCIDENT-001/alert_A001_bundle.json` (plus one bundle per emitted alert)
 
 ## 2) Online reproduction (OpenSearch / Wazuh Indexer)
 
@@ -49,7 +51,7 @@ $env:WAZUH_OS_PASSWORD = "<password>"
 Run:
 
 ```powershell
-\.\.venv\Scripts\python.exe -m wazuh_sysmon_triage run --case-id INCIDENT-ONLINE-001 --index-pattern "wazuh-alerts-4.x-*" --agent-name "anon" --start "2026-02-10T00:00:00Z" --end "2026-02-10T02:00:00Z" --event-id 1 --event-id 3 --event-id 11 --out-dir ./out --print-stats
+triage live --last 2h --case-id INCIDENT-ONLINE-001 --agent-name "anon" --print-stats
 ```
 
 ### Config-driven run (example)
@@ -59,7 +61,7 @@ You can place non-secret defaults in a YAML file and keep secrets in environment
 ```powershell
 $env:WAZUH_OS_PASSWORD = "<password>"
 
-\.\.venv\Scripts\python.exe -m wazuh_sysmon_triage run --config config.example.yaml --case-id INCIDENT-CONFIG-001 --print-stats
+triage live --config config.example.yaml --last 2h --case-id INCIDENT-CONFIG-001
 ```
 
 ### TLS note
@@ -67,7 +69,7 @@ $env:WAZUH_OS_PASSWORD = "<password>"
 If you are using a lab indexer with a self-signed certificate:
 
 ```powershell
-\.\.venv\Scripts\python.exe -m wazuh_sysmon_triage run --no-verify-tls ...
+triage live --no-verify-tls --last 2h ...
 ```
 
 ### SSH tunnel note
@@ -84,19 +86,20 @@ Terminal 2:
 
 ```powershell
 $env:WAZUH_OS_HOST = "https://127.0.0.1:9920"
-\.\.venv\Scripts\python.exe -m wazuh_sysmon_triage run --no-verify-tls --case-id INCIDENT-TUNNEL-001 --agent-name "anon" --start "2026-02-10T00:00:00Z" --end "2026-02-10T02:00:00Z" --event-id 1 --event-id 3 --event-id 11 --out-dir ./out
+triage live --no-verify-tls --last 2h --case-id INCIDENT-TUNNEL-001 --agent-name "anon"
 ```
 
-Recommended (PowerShell one-liner, dynamic 2-hour window, venv interpreter):
+Recommended short command:
 
 ```powershell
-$env:WAZUH_OS_HOST = "https://127.0.0.1:9920"; $start = (Get-Date).AddHours(-2).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"); $end = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"); & ".\.venv\Scripts\python.exe" -m wazuh_sysmon_triage run --config .\config.local.yaml --start $start --end $end --case-id "incident-002-eid1-3-11" --agent-name "anon" --no-verify-tls --event-id 1 --event-id 3 --event-id 11
+triage live --config .\config.local.yaml --last 2h --case-id incident-002-eid1-3-11 --no-verify-tls
 ```
 
 ## 3) Reproducibility notes
 
 - The tool is designed to produce deterministic bundle structure and stable ordering.
 - Bundles include captured inputs and metadata (e.g., `query.json`, `run_metadata.json`, `stats.json`) to support review and reruns.
+- Detection-stage tuning is reproducible through config (`min_alert_score`, `destination_scoring_mode`, and `suppressions`).
 
 ## 4) Create your own offline dataset (online → NDJSON → offline)
 
@@ -111,5 +114,70 @@ Fetch to NDJSON:
 Replay offline:
 
 ```powershell
-\.\.venv\Scripts\python.exe -m wazuh_sysmon_triage run --case-id INCIDENT-OFFLINE-REPLAY-001 --input-ndjson ./samples/my_capture/raw_hits.ndjson --out-dir ./out --print-stats
+triage offline --input-ndjson ./samples/my_capture/raw_hits.ndjson --case-id INCIDENT-OFFLINE-REPLAY-001 --print-stats
 ```
+
+## 5) Release regression checklist (quick gate)
+
+Run these from repository root before tagging or deploying.
+
+### A. Python full suite
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+Pass criteria: all tests pass.
+
+### B. Focused hardening suite (schema/perf/sanitize/scenario)
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q tests/test_scenario_gym.py tests/test_schema_compat.py tests/test_perf_smoke.py tests/test_sanitize.py
+```
+
+Pass criteria: all focused tests pass.
+
+### C. UI tests and build
+
+```powershell
+npm --prefix ui run test
+npm --prefix ui run build
+```
+
+Pass criteria: test run succeeds and production build succeeds.
+
+### D. Live connectivity + bounded pipeline probe
+
+Prerequisite:
+
+```powershell
+$env:WAZUH_OS_PASSWORD = "<password>"
+```
+
+Dry-run query validation:
+
+```powershell
+triage live --config .\config.local.yaml --profile soc --last 2h --dry-run-query
+```
+
+Bounded end-to-end probe:
+
+```powershell
+triage live --config .\config.local.yaml --profile soc --last 2h --max-events 10 --max-pages 1 --print-stats --alerts-only
+```
+
+Pass criteria:
+
+- Dry-run prints resolved query payload successfully.
+- Probe reaches `Run complete` and all stages (`fetch`, `normalize`, `correlate`, `detect`, `render`) finish.
+
+### E. Scenario timestamp recency check
+
+```powershell
+triage offline --config .\config.local.yaml --input-ndjson samples/scenario_gym/obfuscated_powershell_critical_combo.ndjson --case-id rebase-check --print-stats --alerts-only --min-alert-score 0
+```
+
+Pass criteria:
+
+- Logs include `Scenario gym timestamps rebased`.
+- Output timeline timestamps are near current UTC time.

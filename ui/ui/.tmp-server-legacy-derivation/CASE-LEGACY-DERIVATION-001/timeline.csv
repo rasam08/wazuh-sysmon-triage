@@ -1,0 +1,2 @@
+ts,event_id,image,command_line,parent_image,target_filename,user,rule_id,agent_name,agent_id
+2026-02-18T20:03:55.000Z,1,C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe,powershell.exe -NoProfile,C:\Windows\explorer.exe,,HOST\legacy,92203,anon,010

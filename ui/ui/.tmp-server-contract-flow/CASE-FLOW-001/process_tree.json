@@ -1,0 +1,28 @@
+{
+  "schema_version": "1.1.0",
+  "agent": {
+    "name": "agent-test",
+    "id": "999"
+  },
+  "time_range": {
+    "start": "2026-02-25T17:12:02.000Z",
+    "end": "2026-02-25T17:12:02.000Z"
+  },
+  "nodes": [
+    {
+      "guid": "{PS-ENC}",
+      "pid": 200,
+      "image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "cmdline": "powershell.exe -enc ...",
+      "user": "HOST\\user",
+      "first_seen": "2026-02-25T17:12:02.000Z",
+      "last_seen": "2026-02-25T17:12:02.000Z",
+      "synthetic": false,
+      "tags": [
+        "attack.t1059"
+      ]
+    }
+  ],
+  "edges": [],
+  "artifacts": []
+}

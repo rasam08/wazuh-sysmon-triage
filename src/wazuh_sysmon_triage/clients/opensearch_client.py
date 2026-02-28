@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any
 
@@ -13,6 +14,7 @@ LOGGER = logging.getLogger(__name__)
 
 RETRY_STATUS_CODES = {429, 502, 503}
 DEFAULT_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
+_INDEX_PATTERN_RE = re.compile(r"^[a-zA-Z0-9_.\-*,]+$")
 
 
 class OpenSearchClient:
@@ -39,16 +41,17 @@ class OpenSearchClient:
         """
         self.base_url = base_url.rstrip("/")
         self.user = user
-        self.password = password
         self.verify_tls = verify_tls
         self.max_retries = max_retries
         self.backoff_seconds = backoff_seconds
         self.client = httpx.Client(
             base_url=self.base_url,
-            auth=(self.user, self.password),
+            auth=(self.user, password),
             verify=self.verify_tls,
             timeout=timeout,
         )
+        # Password is no longer stored as an instance attribute;
+        # httpx.Client holds auth internally.
 
     def _request(
         self,
@@ -61,7 +64,30 @@ class OpenSearchClient:
         attempt = 0
         while True:
             attempt += 1
-            response = self.client.request(method, path, json=json_body)
+            try:
+                response = self.client.request(method, path, json=json_body)
+            except httpx.TransportError as exc:
+                if attempt <= self.max_retries:
+                    delay = self.backoff_seconds * (2 ** (attempt - 1))
+                    LOGGER.warning(
+                        "OpenSearch transport retry",
+                        extra={
+                            "event": "retry_transport",
+                            "stage": "fetch",
+                            "run_id": run_id,
+                            "case_id": case_id,
+                            "counts": {"attempt": attempt},
+                            "duration_ms": int(delay * 1000),
+                            "error": str(exc),
+                        },
+                    )
+                    time.sleep(delay)
+                    continue
+                raise ValueError(
+                    "OpenSearch request failed after retries due to transport errors "
+                    f"against {self.base_url}: {exc}. "
+                    "Check host/port reachability, SSH tunnel, and TLS settings (use --no-verify-tls in lab)."
+                ) from exc
 
             # Friendly diagnostics when users accidentally point at OpenSearch Dashboards
             # (often exposed on :443) instead of the OpenSearch Indexer HTTP API (often :9200).
@@ -80,9 +106,14 @@ class OpenSearchClient:
                 except Exception:
                     body = None
 
-                if isinstance(body, dict) and {"statusCode", "error", "message"}.issubset(body.keys()):
+                if isinstance(body, dict) and {"statusCode", "error", "message"}.issubset(
+                    body.keys()
+                ):
                     # This error shape is typical of Dashboards/proxy handlers.
-                    if body.get("statusCode") == 404 and str(body.get("message", "")).lower() == "not found":
+                    if (
+                        body.get("statusCode") == 404
+                        and str(body.get("message", "")).lower() == "not found"
+                    ):
                         raise ValueError(
                             "Received 404 Not Found from the server. This often means --host points to "
                             "Wazuh/OpenSearch Dashboards (web UI) rather than the OpenSearch Indexer API. "
@@ -91,7 +122,11 @@ class OpenSearchClient:
 
             # Some Wazuh indexer deployments do not expose the PIT API.
             # OpenSearch/Elasticsearch typically return a 400 with a "no handler found" message.
-            if response.status_code == 400 and "_pit" in path and "no handler found for uri" in response.text:
+            if (
+                response.status_code == 400
+                and "_pit" in path
+                and "no handler found for uri" in response.text
+            ):
                 raise ValueError(
                     "PIT API not supported by this OpenSearch endpoint. "
                     "The triage tool will need to fall back to non-PIT pagination (search_after without PIT) "
@@ -122,6 +157,20 @@ class OpenSearchClient:
             request_id = response.headers.get("x-request-id")
             return response.json(), request_id
 
+    @staticmethod
+    def _validate_index_pattern(index_pattern: str) -> str:
+        """Validate index_pattern to prevent path traversal in URL construction."""
+        if not _INDEX_PATTERN_RE.match(index_pattern):
+            raise ValueError(
+                f"Invalid index_pattern '{index_pattern}': "
+                "must contain only alphanumeric characters, dots, hyphens, underscores, asterisks, and commas."
+            )
+        if ".." in index_pattern:
+            raise ValueError(
+                f"Invalid index_pattern '{index_pattern}': path traversal sequences are not allowed."
+            )
+        return index_pattern
+
     def search_index(
         self,
         index_pattern: str,
@@ -130,6 +179,7 @@ class OpenSearchClient:
         run_id: str | None = None,
         case_id: str | None = None,
     ) -> dict[str, Any]:
+        self._validate_index_pattern(index_pattern)
         body = dict(query_body)
         if search_after:
             body["search_after"] = search_after

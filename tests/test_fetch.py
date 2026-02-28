@@ -38,8 +38,8 @@ def test_query_includes_numeric_and_string_eids() -> None:
     eid_filter = _find_eid_filter(filters)
     should = eid_filter["bool"]["should"]
 
-    assert {"terms": {"data.win.system.eventID": [1, 11]}} in should
-    assert {"terms": {"data.win.system.eventID": ["1", "11"]}} in should
+    assert {"terms": {"data.win.system.eventID": [1, 3, 11]}} in should
+    assert {"terms": {"data.win.system.eventID": ["1", "3", "11"]}} in should
     assert any("query_string" in clause for clause in should)
 
 
@@ -56,9 +56,7 @@ def test_query_supports_custom_event_ids() -> None:
 
     assert {"terms": {"data.win.system.eventID": [1, 3, 11]}} in should
     assert {"terms": {"data.win.system.eventID": ["1", "3", "11"]}} in should
-    assert any(
-        clause.get("query_string", {}).get("query") == "1 OR 3 OR 11" for clause in should
-    )
+    assert any(clause.get("query_string", {}).get("query") == "1 OR 3 OR 11" for clause in should)
 
 
 def test_agent_filters_id_only() -> None:

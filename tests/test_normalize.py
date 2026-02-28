@@ -1,3 +1,4 @@
+from copy import deepcopy
 from datetime import UTC, datetime
 
 import pytest
@@ -7,7 +8,7 @@ from wazuh_sysmon_triage.models.sysmon import (
     NetworkConnectEvent,
     ProcessCreateEvent,
 )
-from wazuh_sysmon_triage.pipeline.normalize import normalize_data
+from wazuh_sysmon_triage.pipeline.normalize import normalize_data, normalize_data_with_report
 
 
 @pytest.fixture()
@@ -112,3 +113,75 @@ def test_normalize_data(eid1_hit: dict, eid11_hit: dict, eid3_hit: dict) -> None
 
     assert results[2].target_filename == "C:\\Temp\\test.txt"
     assert results[2].creation_utc_time == datetime(2024, 1, 1, 0, 9, 58, tzinfo=UTC)
+
+
+def test_normalize_invalid_timestamp_is_dropped() -> None:
+    bad_hit = deepcopy(
+        {
+            "_source": {
+                "@timestamp": "not-a-date",
+                "agent": {"id": "999", "name": "agent-test"},
+                "rule": {"id": "100001", "description": "Sysmon Process Create"},
+                "data": {
+                    "win": {
+                        "system": {"eventID": "1"},
+                        "eventdata": {
+                            "UtcTime": "invalid",
+                            "ProcessGuid": "{GUID-BAD}",
+                            "ProcessId": "1234",
+                            "Image": "C:\\Windows\\System32\\cmd.exe",
+                        },
+                    }
+                },
+            }
+        }
+    )
+
+    results = normalize_data([bad_hit])
+    assert results == []
+
+
+def test_normalize_report_invalid_timestamp_by_eid() -> None:
+    hit_invalid_eid1 = {
+        "_source": {
+            "@timestamp": "invalid",
+            "agent": {"id": "999", "name": "agent-test"},
+            "rule": {"id": "100001", "description": "Sysmon Process Create"},
+            "data": {
+                "win": {
+                    "system": {"eventID": "1"},
+                    "eventdata": {
+                        "UtcTime": "invalid",
+                        "ProcessGuid": "{GUID-1}",
+                        "ProcessId": "1234",
+                        "Image": "C:\\Windows\\System32\\cmd.exe",
+                    },
+                }
+            },
+        }
+    }
+    hit_invalid_eid3 = {
+        "_source": {
+            "@timestamp": "invalid",
+            "agent": {"id": "999", "name": "agent-test"},
+            "rule": {"id": "92206", "description": "Sysmon Network Connect"},
+            "data": {
+                "win": {
+                    "system": {"eventID": "3"},
+                    "eventdata": {
+                        "UtcTime": "invalid",
+                        "ProcessGuid": "{GUID-3}",
+                        "ProcessId": "200",
+                        "Image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                        "DestinationIp": "8.8.8.8",
+                        "DestinationPort": "443",
+                    },
+                }
+            },
+        }
+    }
+
+    events, report = normalize_data_with_report([hit_invalid_eid1, hit_invalid_eid3])
+    assert events == []
+    assert report.invalid_timestamp_count == 2
+    assert report.invalid_timestamp_by_eid == {"1": 1, "3": 1}

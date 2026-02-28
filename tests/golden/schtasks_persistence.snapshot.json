@@ -1,0 +1,56 @@
+{
+  "schema_version": "1.1.0",
+  "stats_keys": [
+    "artifacts",
+    "correlate_duration_ms",
+    "detect_duration_ms",
+    "dropped_by_reason",
+    "dropped_count",
+    "edges",
+    "events_by_type",
+    "events_per_second",
+    "fetch_duration_ms",
+    "hits",
+    "invalid_timestamp_by_eid",
+    "invalid_timestamp_count",
+    "nodes",
+    "normalize_duration_ms",
+    "queue_filter",
+    "render_duration_ms",
+    "schema_version",
+    "suppressed_alerts",
+    "suppressed_events",
+    "suppression_hits",
+    "total_duration_ms",
+    "total_events",
+    "truncation"
+  ],
+  "process_tree_keys": [
+    "agent",
+    "artifacts",
+    "edges",
+    "nodes",
+    "schema_version",
+    "time_range"
+  ],
+  "total_events": 1,
+  "events_by_type": {
+    "process_create": 1,
+    "network_connect": 0,
+    "file_create": 0
+  },
+  "counts": {
+    "nodes": 1,
+    "edges": 0,
+    "artifacts": 0,
+    "alerts": 1
+  },
+  "alert_digest": [
+    {
+      "alert_type": "persistence_schtasks_create",
+      "queue": "soc_malware",
+      "confidence": "high",
+      "score": 100
+    }
+  ]
+}

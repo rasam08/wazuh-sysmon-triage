@@ -1,0 +1,7 @@
+utc_time,score,alert_type,category,queue,confidence,reason,routing_why,image,command_line,parent_image,destination_ip,destination_port,process_guid,tags
+2026-02-18T20:03:10.000Z,95,powershell_obfuscation,,,,legacy derivation test,,C:\Windows\System32\cmd.exe,,,,,{LEG-001},
+2026-02-18T20:03:11.000Z,70,outbound_public_connection,,,,legacy derivation test,,C:\Windows\System32\cmd.exe,,,,,{LEG-002},
+2026-02-18T20:03:12.000Z,49,schtasks_persistence,,,,legacy derivation test,,C:\Windows\System32\cmd.exe,,,,,{LEG-003},
+2026-02-18T20:03:13.000Z,80,policy_allowlist_violation,,,,legacy derivation test,,C:\Windows\System32\cmd.exe,,,,,{LEG-004},
+2026-02-18T20:03:14.000Z,50,dev_tool_spawn,,,,legacy derivation test,,C:\Windows\System32\cmd.exe,,,,,{LEG-005},
+2026-02-18T20:03:15.000Z,10,totally_unknown_signal,,,,legacy derivation test,,C:\Windows\System32\cmd.exe,,,,,{LEG-006},

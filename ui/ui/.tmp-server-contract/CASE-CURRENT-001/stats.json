@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.1.0",
+  "total_events": 1,
+  "events_by_type": {
+    "process_create": 1,
+    "network_connect": 0,
+    "file_create": 0
+  },
+  "suppression_hits": {},
+  "truncation": {
+    "truncated": false,
+    "reason": null
+  }
+}

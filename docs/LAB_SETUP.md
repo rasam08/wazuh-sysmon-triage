@@ -42,4 +42,4 @@ A simple way to generate Sysmon events:
 - EID 11 (File Create): create a file (e.g., `echo test > C:\Temp\triage_test.txt`).
 - EID 3 (Network Connect): make an outbound connection (e.g., `curl https://example.com` or open a browser).
 
-The tool is designed to handle normal background noise (Defender, browser traffic, IDE processes).
+The tool is designed to handle normal background noise (Defender, browser traffic, IDE processes), and now supports configurable suppression rules in `config.yaml` for environment-specific tuning.

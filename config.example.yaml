@@ -5,8 +5,8 @@
 ## Time window
 ## - You may set `start`/`end` here OR provide them on the CLI.
 ## - ISO8601 UTC examples: "2026-02-10T00:00:00Z"
-start: "2026-02-10T00:00:00Z"
-end: "2026-02-10T02:00:00Z"
+# start: "2026-02-10T00:00:00Z"
+# end: "2026-02-10T02:00:00Z"
 
 ## Agent filter (use either)
 agent_id: "MyAgentID"
@@ -19,8 +19,10 @@ out_dir: "./out"
 ## Note: Wazuh Dashboards/UI is typically :443; Indexer API is often :9920.
 host: "https://indexer:9920"
 user: "admin"
-pass: "<password>"
 verify_tls: true
+# Credentials policy:
+# - Do not store passwords in config files.
+# - Set WAZUH_OS_PASSWORD in your shell/session before live runs.
 
 ## Index selection
 index_pattern: "wazuh-alerts-4.x-*"
@@ -28,20 +30,89 @@ index_pattern: "wazuh-alerts-4.x-*"
 ## Supported Sysmon Event IDs
 event_ids: [1, 3, 11]
 
-# You can also omit host/user/pass here and instead set these environment variables:
-#   WAZUH_OS_HOST, WAZUH_OS_USER, WAZUH_OS_PASSWORD
+## BATCAVE ALERTS tuning
+## CLI overrides config when provided.
+min_alert_score: 70
+destination_scoring_mode: balanced # strict|balanced|lab
+alert_allowlist_basenames:
+  - MsMpEng.exe
+  - MpCmdRun.exe
+  - NisSrv.exe
+  - MpDefenderCoreService.exe
+  - svchost.exe
+  - chrome.exe
+  - msedge.exe
+  - firefox.exe
+
+suppressions:
+  rules:
+    - name: trusted-browser-outbound
+      image_glob: "*\\chrome.exe"
+      destination_class: public
+      enabled: true
+  allowlist_override:
+    - name: keep-lolbin-visible
+      image_glob: "*\\mshta.exe"
+      enabled: true
+
+## Context roles (tags only; no hard suppression)
+context_roles:
+  developer:
+    agent_names: ["dev-laptop-01", "dev-laptop-02"]
+    users: ["HOST\\alice", "HOST\\bob"]
+    process_image_contains: ["\\.vscode\\", "powershelleditorservices"]
+
+## Queue filter defaults for emitted alerts
+## soc profile normally uses malware+policy and excludes soc_dev unless explicitly enabled
+alert_queues: [soc_malware, soc_policy]
+include_dev_queue: false
+
+## Optional retention policy for auto-pruning old case folders under out_dir
+artifact_retention:
+  enabled: true
+  max_age_days: 30
+  max_total_size_mb: 2048
+  min_keep_runs: 10
+
+## Profile presets (base defaults <- profile <- explicit CLI flags)
+active_profile: soc
+profiles:
+  soc:
+    agent_name: anon
+    event_ids: [1, 3, 11]
+    min_alert_score: 70
+    alerts_only: true
+    print_stats: true
+    destination_scoring_mode: balanced
+    alert_queues: [soc_malware, soc_policy]
+    include_dev_queue: false
+  dev:
+    event_ids: [1, 3, 11]
+    min_alert_score: 70
+    alerts_only: false
+    print_stats: true
+    destination_scoring_mode: balanced
+  lab:
+    event_ids: [1, 3, 11]
+    min_alert_score: 60
+    alerts_only: true
+    print_stats: true
+    destination_scoring_mode: lab
+
+# You can also omit host/user here and set these environment variables:
+#   WAZUH_OS_HOST, WAZUH_OS_USER, WAZUH_OS_PASSWORD, WAZUH_OS_VERIFY_TLS
 
 # Example command using this config:
 #
 #   $env:WAZUH_OS_PASSWORD = "<password>"
-#   python -m wazuh_sysmon_triage run --config config.example.yaml --case-id INCIDENT-EXAMPLE-001 --print-stats
+#   triage live --config config.example.yaml --last 2h --case-id INCIDENT-EXAMPLE-001
 #
-# Recommended (PowerShell one-liner, dynamic 2-hour window, venv interpreter):
+# Recommended (short live command with built-in relative time parsing):
 #
-#   $env:WAZUH_OS_HOST = "https://127.0.0.1:9920"; $start = (Get-Date).AddHours(-2).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"); $end = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"); & ".\.venv\Scripts\python.exe" -m wazuh_sysmon_triage run --config .\config.local.yaml --start $start --end $end --case-id "incident-002-eid1-3-11" --agent-name "anon" --no-verify-tls --event-id 1 --event-id 3 --event-id 11
+#   triage live --config config.local.yaml --last 2h --case-id incident-002-eid1-3-11 --no-verify-tls
 #
 # If you are using an SSH tunnel to reach a localhost-bound indexer:
 #
 #   ssh -N -L 9920:localhost:9920 <user>@<wazuh-server>
 #   $env:WAZUH_OS_HOST = "https://127.0.0.1:9920"
-#   python -m wazuh_sysmon_triage run --no-verify-tls --config config.example.yaml --case-id INCIDENT-TUNNEL-EXAMPLE-001
+#   triage live --no-verify-tls --config config.example.yaml --last 2h --case-id INCIDENT-TUNNEL-EXAMPLE-001

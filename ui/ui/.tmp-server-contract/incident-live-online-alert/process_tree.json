@@ -1,0 +1,12 @@
+{
+  "agent": {
+    "name": "anon"
+  },
+  "time_range": {
+    "start": "2026-02-18T19:15:54.000Z",
+    "end": "2026-02-19T19:15:54.000Z"
+  },
+  "nodes": [],
+  "edges": [],
+  "artifacts": []
+}

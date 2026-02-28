@@ -1,0 +1,18 @@
+{
+  "version": "1.0.0",
+  "case_id": "CASE-LEGACY-DERIVATION-001",
+  "profile": "soc",
+  "start": "2026-02-18T19:15:54.000Z",
+  "end": "2026-02-19T19:15:54.000Z",
+  "counts": {
+    "normalized_events": 2,
+    "alerts": 1,
+    "suppressed_alerts": 1
+  },
+  "fetch_duration_ms": 5,
+  "normalize_duration_ms": 4,
+  "correlate_duration_ms": 3,
+  "detect_duration_ms": 2,
+  "render_duration_ms": 2,
+  "total_duration_ms": 16
+}

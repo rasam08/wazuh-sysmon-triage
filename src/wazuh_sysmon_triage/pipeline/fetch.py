@@ -17,7 +17,7 @@ class FetchResult:
     fetched_count: int
 
 
-DEFAULT_EVENT_IDS = (1, 11)
+DEFAULT_EVENT_IDS = (1, 3, 11)
 
 
 def build_sysmon_query(
@@ -30,7 +30,7 @@ def build_sysmon_query(
     agent_mode: str = "any",
 ) -> dict[str, Any]:
     """
-    Build the OpenSearch DSL query for Sysmon EID 1 and 11 in Wazuh alerts.
+    Build the OpenSearch DSL query for Sysmon EID 1, 3, and 11 in Wazuh alerts.
 
     Uses @timestamp as the canonical time filter and matches agent by ID or name.
     Event ID matching is tolerant of numeric or string mappings.
@@ -119,7 +119,7 @@ def fetch_sysmon_events(
     end_dt: str | datetime,
     agent_id: str | None,
     agent_name: str | None,
-    event_ids: Sequence[int] = (1, 11),
+    event_ids: Sequence[int] = (1, 3, 11),
     page_size: int = 1000,
     agent_mode: str = "any",
     run_id: str | None = None,
@@ -209,7 +209,9 @@ def fetch_sysmon_events(
     )
 
 
-def fetch_data(agent_id: str, start: str, end: str, agent_name: str | None = None) -> dict:
+def fetch_data(
+    agent_id: str, start: str, end: str, agent_name: str | None = None
+) -> dict[str, Any]:
     """
     Build a query for data based on agent selectors and time range.
 
@@ -236,7 +238,7 @@ def fetch_data(agent_id: str, start: str, end: str, agent_name: str | None = Non
     }
 
 
-def fetch_all_agents(start: str, end: str) -> dict:
+def fetch_all_agents(start: str, end: str) -> dict[str, Any]:
     """
     Fetch data for all agents within the specified time range.
 

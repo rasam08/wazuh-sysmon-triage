@@ -1,0 +1,14 @@
+{
+  "hits": 2,
+  "events_by_type": {
+    "process_create": 1,
+    "file_create": 1
+  },
+  "suppression_hits": {
+    "allowlist:chrome.exe": 1
+  },
+  "truncation": {
+    "truncated": false,
+    "reason": null
+  }
+}

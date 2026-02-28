@@ -1,0 +1,24 @@
+{
+  "alert": {
+    "alert_id": "A001",
+    "score": 95,
+    "alert_type": "powershell_obfuscation",
+    "reason": "PowerShell obfuscation",
+    "process_guid": "{PS-ENC}"
+  },
+  "anchor_event": {
+    "timestamp": "2026-02-25T17:12:02.000Z",
+    "event_id": 1,
+    "image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    "command_line": "powershell.exe -enc ...",
+    "parent_image": "C:\\Windows\\explorer.exe",
+    "user": "HOST\\user",
+    "agent_name": "agent-test",
+    "agent_id": "999"
+  },
+  "network_connections": [],
+  "suppression_context": {
+    "suppressed_related_event_count": 0,
+    "matched_rules": []
+  }
+}

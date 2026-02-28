@@ -35,6 +35,23 @@ Fix:
 - Verify `WAZUH_OS_USER` / `WAZUH_OS_PASSWORD`
 - Confirm the account has read access to the alert indices matching your `--index-pattern`
 
+## 4.1) Unexpected host/user/tls settings
+
+Cause: Effective settings may come from different sources (CLI flags, profile/config, environment).
+
+Notes:
+
+- `triage live` and `triage offline` auto-load `config.local.yaml` if present.
+- Runtime prints: `[process] config: using config.local.yaml (override with --config)` when this occurs.
+- Precedence is:
+	- `host`, `user`: CLI > profile/config > environment
+	- `password`: CLI > environment > profile/config
+
+Fix:
+
+- Pass explicit flags (`--host`, `--user`, `--no-verify-tls`) for one-off runs, or
+- set them in your selected profile/config and remove stale environment variables.
+
 ## 5) No results returned
 
 Checklist:
@@ -51,3 +68,14 @@ If you see unexpected truncation, consider:
 
 - Using `--max-events` / `--max-pages`
 - Using `--fail-on-truncation` when you need strict completeness
+
+## 7) Too many alerts from normal background activity
+
+Cause: Environment noise differs between lab, dev, and production endpoints.
+
+Fix:
+
+- Raise `min_alert_score` in config or via `--min-alert-score`.
+- Set `destination_scoring_mode` to `strict` to reduce network suspiciousness noise.
+- Add targeted `suppressions.rules` in config (image glob/regex, user, destination class, ports).
+- Use `suppressions.allowlist_override` to keep high-interest processes visible even when broad suppressions exist.

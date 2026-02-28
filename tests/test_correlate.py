@@ -99,3 +99,74 @@ def test_correlate_tags_and_network_activity() -> None:
     assert network["suspicious"] is True
     assert "public_ip" in network["reason"]
     assert "uncommon_port" in network["reason"]
+
+
+def test_destination_scoring_modes() -> None:
+    process = ProcessCreateEvent(
+        event_id=1,
+        timestamp=datetime(2024, 1, 1, 0, 0, 0, tzinfo=UTC),
+        agent_id="999",
+        agent_name="agent-test",
+        process_guid="{GUID-2}",
+        process_id=210,
+        image="C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        command_line="powershell.exe -enc aQBlAHgA",
+        user="HOST\\user",
+    )
+    web_net = NetworkConnectEvent(
+        event_id=3,
+        timestamp=datetime(2024, 1, 1, 0, 0, 10, tzinfo=UTC),
+        agent_id="999",
+        agent_name="agent-test",
+        process_guid="{GUID-2}",
+        process_id=210,
+        image="C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        destination_ip="8.8.8.8",
+        destination_port=443,
+        protocol="tcp",
+    )
+
+    strict_result = correlate_data([process, web_net], destination_scoring_mode="strict")
+    assert strict_result["network_activity"][0]["suspicious"] is False
+
+    balanced_result = correlate_data([process, web_net], destination_scoring_mode="balanced")
+    assert balanced_result["network_activity"][0]["suspicious"] is False
+
+    lab_result = correlate_data([process, web_net], destination_scoring_mode="lab")
+    assert lab_result["network_activity"][0]["suspicious"] is True
+    assert lab_result["network_activity"][0]["destination_class"] == "public"
+
+
+def test_correlate_links_parent_guid_when_events_arrive_out_of_order() -> None:
+    child = ProcessCreateEvent(
+        event_id=1,
+        timestamp=datetime(2024, 1, 1, 0, 1, 0, tzinfo=UTC),
+        agent_id="999",
+        agent_name="agent-test",
+        process_guid="{CHILD-OOO}",
+        process_id=200,
+        image="C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        command_line="powershell.exe -enc aQBlAHgA",
+        user="HOST\\user",
+        parent_process_guid="{PARENT-OOO}",
+        parent_process_id=100,
+        parent_image="C:\\Windows\\System32\\schtasks.exe",
+    )
+    parent = ProcessCreateEvent(
+        event_id=1,
+        timestamp=datetime(2024, 1, 1, 0, 0, 0, tzinfo=UTC),
+        agent_id="999",
+        agent_name="agent-test",
+        process_guid="{PARENT-OOO}",
+        process_id=100,
+        image="C:\\Windows\\System32\\schtasks.exe",
+        command_line="schtasks.exe /create",
+        user="HOST\\user",
+    )
+
+    result = correlate_data([child, parent])
+    edges = result["edges"]
+    assert len(edges) == 1
+    assert edges[0].parent_guid == "{PARENT-OOO}"
+    assert edges[0].child_guid == "{CHILD-OOO}"
+    assert edges[0].reason == "SysmonEID1 parentProcessGuid -> processGuid"
