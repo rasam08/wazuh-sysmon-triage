@@ -33,7 +33,12 @@ output/
 out_*/
 ui/playwright-report/
 ui/test-results/
+ui/node_modules/
+ui/ui/.tmp-*/
 
 # Local config (may contain credentials)
 config.local.yaml
 config.local.yml
+
+# Local assistant skill packs and scratch artifacts
+.claude/

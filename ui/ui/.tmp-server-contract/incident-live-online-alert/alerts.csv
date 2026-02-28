@@ -1,2 +1,0 @@
-utc_time,score,alert_type,reason,image,command_line,parent_image,destination_ip,destination_port,process_guid,tags
-2026-02-18T20:03:55.000Z,25,powershell_suspicious_execution,No-profile flag,C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe,powershell.exe -NoProfile,C:\Windows\explorer.exe,,,{LEG-PS},batcave;powershell

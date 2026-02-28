@@ -1,2 +1,0 @@
-utc_time,score,alert_type,category,queue,confidence,reason,routing_why,image,command_line,parent_image,destination_ip,destination_port,process_guid,tags
-2026-02-25T17:12:02.000Z,95,powershell_obfuscation,malware_execution,soc_malware,high,PowerShell obfuscation,Routed to soc_malware,C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe,powershell.exe -enc ...,C:\Windows\explorer.exe,,,{PS-ENC},signal:obfuscation
