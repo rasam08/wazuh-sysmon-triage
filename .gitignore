@@ -41,6 +41,8 @@ tmp-out/
 # Local config (may contain credentials)
 config.local.yaml
 config.local.yml
+ROADMAP_TO_10.md
+REVIEW_REPORT.md
 
 # Local assistant skill packs and scratch artifacts
 .claude/
