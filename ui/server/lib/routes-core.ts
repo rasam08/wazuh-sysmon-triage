@@ -54,6 +54,15 @@ import { startJobProgressStream } from './routes-sse';
 import { RunnerError } from './runner';
 import { validateCaseId, validateRunParams, ValidationError } from './validators';
 
+function asyncRunsDisabledResponse(route: string): ApiDispatchResponse {
+  return {
+    status: 404,
+    body: {
+      error: `Async runs disabled; ${route} is unavailable. Use POST /api/runs or set TRIAGE_ASYNC_RUNS_ENABLED=true.`,
+    },
+  };
+}
+
 export async function dispatchApiRequest(
   request: ApiDispatchRequest,
   options: RouteOptions = {},
@@ -149,7 +158,7 @@ export async function dispatchApiRequest(
 
     if (route === '/api/runs/submit' && method === 'POST') {
       if (!asyncRunsEnabled) {
-        return { status: 404, body: { error: `Unknown API route: ${route}` } };
+        return asyncRunsDisabledResponse(route);
       }
       const params = validateRunParams(request.body, {
         defaultOutDir: context.outDir,
@@ -176,7 +185,7 @@ export async function dispatchApiRequest(
 
     if (jobRoute?.kind === 'status' && method === 'GET') {
       if (!asyncRunsEnabled) {
-        return { status: 404, body: { error: `Unknown API route: ${route}` } };
+        return asyncRunsDisabledResponse(route);
       }
       const job = context.runQueueService.getJob(jobRoute.jobId);
       return { status: 200, body: { job } };
@@ -184,11 +193,15 @@ export async function dispatchApiRequest(
 
     if (jobRoute?.kind === 'cancel' && method === 'POST') {
       if (!asyncRunsEnabled) {
-        return { status: 404, body: { error: `Unknown API route: ${route}` } };
+        return asyncRunsDisabledResponse(route);
       }
       const job = context.runQueueService.cancelJob(jobRoute.jobId, 'user');
       context.runIndexService.invalidate();
       return { status: 202, body: { cancelled: true, job } };
+    }
+
+    if (jobRoute?.kind === 'stream' && method === 'GET' && !asyncRunsEnabled) {
+      return asyncRunsDisabledResponse(route);
     }
 
     if (

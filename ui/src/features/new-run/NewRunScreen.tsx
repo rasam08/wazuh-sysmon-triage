@@ -167,12 +167,17 @@ export default function NewRunScreen() {
 
     const params = buildParams();
     try {
-      const runId = await submitRun(params);
-      addToast('success', `Run queued: ${caseId}`);
+      const submitted = await submitRun(params);
+      if (submitted.executionMode === 'async') {
+        addToast('success', `Run queued: ${caseId}`);
+      } else {
+        addToast('success', `Run completed via sync mode: ${caseId}`);
+        addToast('info', 'Async submit is disabled; used POST /api/runs fallback');
+      }
       setShowSuccess(true);
       setTimeout(() => {
         setShowSuccess(false);
-        navigate(`/runs?selected=${runId}`);
+        navigate(`/runs?selected=${submitted.runId}`);
       }, 1200);
     } catch (e) {
       addToast('error', `Run failed: ${(e as Error).message}`);

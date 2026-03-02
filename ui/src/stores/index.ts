@@ -70,7 +70,7 @@ interface RunsState {
   error: string | null;
   fetchRuns: () => Promise<void>;
   selectRun: (id: string | null) => void;
-  submitRun: (params: RunParams) => Promise<string>;
+  submitRun: (params: RunParams) => Promise<{ runId: string; executionMode: 'async' | 'sync' }>;
   fetchJobStatus: (jobId: string) => Promise<void>;
   subscribeRunProgress: (jobId: string) => (() => void);
   startRun: (params: RunParams) => Promise<string>;
@@ -213,23 +213,27 @@ export const useRunsStore = create<RunsState>((set, get) => {
       });
 
       try {
-        const accepted = await api.submitRun(params);
-        upsertRun({
-          id: caseId,
-          params,
-          status: 'pending',
-          started_at: accepted.accepted_at,
-          queued_at: accepted.accepted_at,
-          progress_pct: 0,
-          job_id: accepted.job_id,
-        });
-        if (typeof EventSource === 'undefined') {
-          ensureJobPolling(accepted.job_id, JOB_POLL_INTERVAL_MS);
-        } else {
-          ensureJobStreaming(accepted.job_id);
-          ensureJobPolling(accepted.job_id, JOB_STREAM_FALLBACK_POLL_INTERVAL_MS);
+        const submitted = await api.submitRun(params);
+        if (submitted.execution_mode === 'async') {
+          upsertRun({
+            id: caseId,
+            params,
+            status: 'pending',
+            started_at: submitted.accepted_at,
+            queued_at: submitted.accepted_at,
+            progress_pct: 0,
+            job_id: submitted.job_id,
+          });
+          if (typeof EventSource === 'undefined') {
+            ensureJobPolling(submitted.job_id, JOB_POLL_INTERVAL_MS);
+          } else {
+            ensureJobStreaming(submitted.job_id);
+            ensureJobPolling(submitted.job_id, JOB_STREAM_FALLBACK_POLL_INTERVAL_MS);
+          }
+          return { runId: caseId, executionMode: 'async' };
         }
-        return caseId;
+        upsertRun(submitted.run);
+        return { runId: submitted.run.id, executionMode: 'sync' };
       } catch (e) {
         upsertRun({
           id: caseId,

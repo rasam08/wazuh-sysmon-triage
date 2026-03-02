@@ -182,6 +182,17 @@ npm --prefix ui run build
 npm --prefix ui start
 ```
 
+One-command live launcher (PowerShell, recommended for first run):
+
+```powershell
+$env:WAZUH_OS_HOST = "https://127.0.0.1:9920"
+$env:WAZUH_OS_USER = "admin"
+$env:WAZUH_OS_PASSWORD = "<password>"
+.\scripts\start-ui-live.ps1
+```
+
+`start-ui-live.ps1` preflights required live-mode env vars, validates local indexer/tunnel reachability on port `9920`, checks that UI port `4173` is free, builds `ui/dist`, then starts `npm --prefix ui start` with safe local bind defaults.
+
 Default bind: `http://127.0.0.1:4173`
 
 For non-local access, set `PUBLIC_BIND=true` and provide auth credentials:

@@ -1,6 +1,32 @@
 import { describe, it, expect, vi } from 'vitest';
-import { deleteCase, fetchCase, fetchHealth } from '@/data/api';
-import type { Case } from '@/types';
+import { deleteCase, fetchCase, fetchHealth, submitRun } from '@/data/api';
+import type { Case, Run, RunParams } from '@/types';
+
+const SUBMIT_PARAMS: RunParams = {
+  mode: 'offline',
+  profile: 'soc',
+  time_preset: '2h',
+  queues: ['soc_malware'],
+  include_dev_queue: false,
+  min_alert_score: 70,
+  out_dir: './out',
+  case_id: 'CASE-SUBMIT-001',
+  dry_run: false,
+  alerts_only: false,
+  print_stats: true,
+  verify_tls: true,
+  input_file: 'samples/scenario_gym/encoded_powershell.ndjson',
+};
+
+const SYNC_RUN: Run = {
+  id: SUBMIT_PARAMS.case_id,
+  params: SUBMIT_PARAMS,
+  status: 'success',
+  started_at: '2026-03-01T00:00:00Z',
+  completed_at: '2026-03-01T00:00:05Z',
+  duration_ms: 5000,
+  alert_count: 0,
+};
 
 describe('API client regression', () => {
   it('fetches arbitrary case IDs without hardcoded filtering', async () => {
@@ -100,5 +126,58 @@ describe('API client regression', () => {
     expect((init as RequestInit | undefined)?.method).toBe('DELETE');
     const headers = new Headers((init as RequestInit | undefined)?.headers);
     expect(headers.get('X-Requested-With')).toBe('XMLHttpRequest');
+  });
+
+  it('uses async submit endpoint when available', async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          job_id: 'job-async-001',
+          case_id: SUBMIT_PARAMS.case_id,
+          accepted_at: '2026-03-01T00:00:00Z',
+        }),
+        { status: 202, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const result = await submitRun(SUBMIT_PARAMS);
+    expect(result).toEqual({
+      execution_mode: 'async',
+      job_id: 'job-async-001',
+      case_id: SUBMIT_PARAMS.case_id,
+      accepted_at: '2026-03-01T00:00:00Z',
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe('/api/runs/submit');
+  });
+
+  it('falls back to sync submit when async endpoint is disabled', async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            error: 'Async runs disabled; /api/runs/submit is unavailable. Use POST /api/runs or set TRIAGE_ASYNC_RUNS_ENABLED=true.',
+          }),
+          { status: 404, headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ run: SYNC_RUN }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+
+    const result = await submitRun(SUBMIT_PARAMS);
+    expect(result.execution_mode).toBe('sync');
+    if (result.execution_mode === 'sync') {
+      expect(result.run.id).toBe(SUBMIT_PARAMS.case_id);
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/runs/submit');
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('/api/runs');
   });
 });

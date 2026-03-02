@@ -29,11 +29,24 @@ export interface RunJob {
   cancel_reason?: string;
 }
 
-interface RunSubmitResponse {
+interface AsyncRunSubmitResponse {
   job_id: string;
   case_id: string;
   accepted_at: string;
 }
+
+export type RunSubmitResult =
+  | {
+    execution_mode: 'async';
+    job_id: string;
+    case_id: string;
+    accepted_at: string;
+  }
+  | {
+    execution_mode: 'sync';
+    case_id: string;
+    run: Run;
+  };
 
 interface RunJobEvent {
   event: 'progress' | 'terminal';
@@ -103,6 +116,12 @@ function isNotFound(err: unknown): boolean {
   return err instanceof ApiError && err.status === 404;
 }
 
+function isAsyncSubmitRouteUnavailable(err: unknown): boolean {
+  if (!(err instanceof ApiError) || err.status !== 404) return false;
+  const normalized = err.message.toLowerCase();
+  return normalized.includes('/api/runs/submit') || normalized.includes('async runs disabled');
+}
+
 export async function fetchRuns(): Promise<Run[]> {
   const payload = await requestJson<{ runs: Run[] }>(apiPath('/runs'));
   return payload.runs;
@@ -121,16 +140,32 @@ export async function startRun(params: RunParams, init?: RequestInit): Promise<R
   return payload.run;
 }
 
-export async function submitRun(params: RunParams, init?: RequestInit): Promise<RunSubmitResponse> {
-  return requestJson<RunSubmitResponse>(apiPath('/runs/submit'), {
-    ...init,
-    method: 'POST',
-    headers: {
-      ...(init?.headers ?? {}),
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ params }),
-  });
+export async function submitRun(params: RunParams, init?: RequestInit): Promise<RunSubmitResult> {
+  try {
+    const payload = await requestJson<AsyncRunSubmitResponse>(apiPath('/runs/submit'), {
+      ...init,
+      method: 'POST',
+      headers: {
+        ...(init?.headers ?? {}),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ params }),
+    });
+    return {
+      execution_mode: 'async',
+      ...payload,
+    };
+  } catch (error) {
+    if (!isAsyncSubmitRouteUnavailable(error)) {
+      throw error;
+    }
+    const run = await startRun(params, init);
+    return {
+      execution_mode: 'sync',
+      case_id: run.id,
+      run,
+    };
+  }
 }
 
 export async function fetchJobStatus(jobId: string): Promise<RunJob> {

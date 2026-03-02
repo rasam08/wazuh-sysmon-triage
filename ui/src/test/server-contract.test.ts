@@ -873,6 +873,51 @@ describe('server contract routes', () => {
     expect(payload.health.last_successful_fetch_at).toBe('2026-02-26T01:00:00Z');
   });
 
+  it('returns actionable error when async submit routes are disabled', async () => {
+    const originalAsyncFlag = process.env.TRIAGE_ASYNC_RUNS_ENABLED;
+    delete process.env.TRIAGE_ASYNC_RUNS_ENABLED;
+    const outDir = path.resolve('ui/.tmp-server-async-disabled');
+    fs.rmSync(outDir, { recursive: true, force: true });
+    fs.mkdirSync(outDir, { recursive: true });
+
+    try {
+      const response = await dispatchApiRequest(
+        {
+          method: 'POST',
+          url: '/api/runs/submit',
+          body: {
+            params: {
+              ...buildParams(outDir, 'CASE-ASYNC-DISABLED-001'),
+              input_file: 'samples/scenario_gym/encoded_powershell.ndjson',
+            },
+          },
+        },
+        {
+          rootDir: path.resolve('.'),
+          outDir,
+          offlineInputRoots: ['samples'],
+        },
+      );
+      expect(response).not.toBeNull();
+      expect(response?.status).toBe(404);
+      expect(response?.body).toEqual({
+        error: expect.stringContaining('Async runs disabled'),
+      });
+      expect(response?.body).toEqual({
+        error: expect.stringContaining('POST /api/runs'),
+      });
+      expect(response?.body).toEqual({
+        error: expect.stringContaining('TRIAGE_ASYNC_RUNS_ENABLED=true'),
+      });
+    } finally {
+      if (originalAsyncFlag === undefined) {
+        delete process.env.TRIAGE_ASYNC_RUNS_ENABLED;
+      } else {
+        process.env.TRIAGE_ASYNC_RUNS_ENABLED = originalAsyncFlag;
+      }
+    }
+  });
+
   it('supports async submit and job status lifecycle when feature flag is enabled', async () => {
     const originalAsyncFlag = process.env.TRIAGE_ASYNC_RUNS_ENABLED;
     process.env.TRIAGE_ASYNC_RUNS_ENABLED = 'true';

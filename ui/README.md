@@ -45,6 +45,14 @@ After `npm run build`, run:
 npm start
 ```
 
+From repo root, Windows operators can use the guided launcher:
+
+```powershell
+.\scripts\start-ui-live.ps1
+```
+
+This runs preflight checks (required live env vars, tunnel/indexer port check, port availability) before starting the standalone server.
+
 Default bind is `0.0.0.0:4173` (override with `PORT`).
 
 Optional HTTP Basic auth:
