@@ -105,13 +105,13 @@ def test_run_requires_opensearch_creds() -> None:
 
 def test_run_case_id_outputs(tmp_path, monkeypatch) -> None:
     class DummyClient:
-        def __init__(self, *args, **kwargs) -> None:
+        def __init__(self, *_args, **_kwargs) -> None:
             pass
 
         def close(self) -> None:
             return None
 
-    def dummy_fetch(*args, **kwargs):
+    def dummy_fetch(*_args, **_kwargs):
         return FetchResult(hits=[], truncated=False, reason=None, fetched_count=0)
 
     monkeypatch.setattr(cli, "OpenSearchClient", DummyClient)
@@ -668,7 +668,7 @@ def test_config_password_ignored_in_favor_of_env(tmp_path, monkeypatch) -> None:
         None,
         None,
     )
-    assert resolved_env["password"] == "env-secret"
+    assert resolved_env["password"] == "env-secret"  # pragma: allowlist secret
 
 
 def test_live_dry_run_warns_on_inline_config_password(tmp_path, monkeypatch) -> None:
@@ -810,15 +810,15 @@ def test_live_window_defaults_and_today_override(monkeypatch, tmp_path) -> None:
     captured: dict[str, str] = {}
 
     class DummyClient:
-        def __init__(self, *args, **kwargs) -> None:
+        def __init__(self, *_args, **_kwargs) -> None:
             pass
 
         def close(self) -> None:
             return None
 
-    def dummy_fetch(*args, **kwargs):
-        captured["start"] = kwargs["start_dt"]
-        captured["end"] = kwargs["end_dt"]
+    def dummy_fetch(*_args, **_kwargs):
+        captured["start"] = _kwargs["start_dt"]
+        captured["end"] = _kwargs["end_dt"]
         return FetchResult(hits=[], truncated=False, reason=None, fetched_count=0)
 
     monkeypatch.setattr(cli, "OpenSearchClient", DummyClient)

@@ -15,6 +15,7 @@ from wazuh_sysmon_triage.models.sysmon import (
     SysmonEvent,
 )
 from wazuh_sysmon_triage.output_schema import OUTPUT_SCHEMA_VERSION
+from wazuh_sysmon_triage.pipeline.network_utils import destination_class
 
 
 def _event_fingerprint(event: SysmonEvent) -> tuple[Any, ...]:
@@ -78,17 +79,7 @@ def _matches_rule(
 
 
 def _destination_class(value: str | None) -> str | None:
-    if not value:
-        return None
-    if value.startswith("10.") or value.startswith("192.168."):
-        return "private"
-    if value.startswith("172."):
-        parts = value.split(".")
-        if len(parts) >= 2 and 16 <= int(parts[1]) <= 31:
-            return "private"
-    if value.startswith("127."):
-        return "private"
-    return "public"
+    return destination_class(value)
 
 
 def _basename(path: str | None) -> str:

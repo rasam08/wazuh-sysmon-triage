@@ -36,8 +36,20 @@ _resolve_time_window = _cli_helpers._resolve_time_window
 
 def _sync_runtime_dependencies() -> None:
     # Keep test monkeypatch behavior stable after extraction.
-    _cli_helpers.OpenSearchClient = OpenSearchClient  # type: ignore[misc]
-    _cli_helpers.fetch_sysmon_events = fetch_sysmon_events
+    module_dependencies = (
+        ("OpenSearchClient", OpenSearchClient),
+        ("fetch_sysmon_events", fetch_sysmon_events),
+    )
+    for attr_name, dependency in module_dependencies:
+        setattr(_cli_helpers, attr_name, dependency)
+    core_module = getattr(_cli_helpers, "_core", None)
+    if core_module is not None:
+        for attr_name, dependency in module_dependencies:
+            setattr(core_module, attr_name, dependency)
+        runtime_module = getattr(core_module, "_runtime", None)
+        if runtime_module is not None:
+            for attr_name, dependency in module_dependencies:
+                setattr(runtime_module, attr_name, dependency)
 
 
 @app.command("fetch")
