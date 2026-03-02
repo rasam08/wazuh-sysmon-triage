@@ -27,7 +27,7 @@ vi.mock('node:https', () => ({
   },
 }));
 
-import { getHealthSnapshot } from '../../server/lib/health';
+import { getHealthSnapshot, resetHealthSnapshotCache } from '../../server/lib/health';
 
 type MockChild = EventEmitter & {
   stdout: PassThrough;
@@ -36,6 +36,7 @@ type MockChild = EventEmitter & {
 
 const tempDirs: string[] = [];
 let originalWazuhHost: string | undefined;
+let originalOpenSearchAllowlist: string | undefined;
 
 function makeTempDir(label: string): string {
   const dir = path.resolve(`ui/.tmp-health-${label}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -103,8 +104,11 @@ function mockHttpsError(message: string): void {
 }
 
 beforeEach(() => {
+  resetHealthSnapshotCache();
   originalWazuhHost = process.env.WAZUH_OS_HOST;
+  originalOpenSearchAllowlist = process.env.TRIAGE_OPENSEARCH_HOST_ALLOWLIST;
   delete process.env.WAZUH_OS_HOST;
+  delete process.env.TRIAGE_OPENSEARCH_HOST_ALLOWLIST;
 
   mocks.spawn.mockReset();
   mocks.httpRequest.mockReset();
@@ -119,16 +123,23 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetHealthSnapshotCache();
   if (originalWazuhHost === undefined) {
     delete process.env.WAZUH_OS_HOST;
   } else {
     process.env.WAZUH_OS_HOST = originalWazuhHost;
+  }
+  if (originalOpenSearchAllowlist === undefined) {
+    delete process.env.TRIAGE_OPENSEARCH_HOST_ALLOWLIST;
+  } else {
+    process.env.TRIAGE_OPENSEARCH_HOST_ALLOWLIST = originalOpenSearchAllowlist;
   }
 
   for (const dir of tempDirs) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
   tempDirs.length = 0;
+  delete process.env.TRIAGE_HEALTH_CACHE_MS;
 });
 
 describe('health snapshot', () => {
@@ -205,6 +216,82 @@ describe('health snapshot', () => {
     expect(health.error).toContain('self signed certificate');
   });
 
+  it('rejects disallowed OpenSearch host before network probe when allowlist is configured', async () => {
+    process.env.TRIAGE_OPENSEARCH_HOST_ALLOWLIST = 'indexer.example.local';
+    mockDryRunSuccess({
+      resolved: {
+        host: 'https://blocked.example.local:9200',
+        verify_tls: true,
+      },
+    });
+
+    const rootDir = makeTempDir('allowlist-block-root');
+    const outDir = makeTempDir('allowlist-block-out');
+
+    const health = await getHealthSnapshot({
+      rootDir,
+      outDir,
+      profile: 'soc',
+      timeoutMs: 50,
+    });
+
+    expect(health.opensearch_connectivity).toBe('unreachable');
+    expect(health.opensearch_http_status).toBeNull();
+    expect(health.error).toContain('host_not_allowlisted');
+    expect(mocks.httpsRequest).not.toHaveBeenCalled();
+    expect(mocks.httpRequest).not.toHaveBeenCalled();
+  });
+
+  it('allows OpenSearch host when exact allowlist entry matches', async () => {
+    process.env.TRIAGE_OPENSEARCH_HOST_ALLOWLIST = 'indexer.example.local';
+    mockDryRunSuccess({
+      resolved: {
+        host: 'https://indexer.example.local:9200',
+        verify_tls: true,
+      },
+    });
+    mockHttpsResponse(200);
+
+    const rootDir = makeTempDir('allowlist-allow-root');
+    const outDir = makeTempDir('allowlist-allow-out');
+
+    const health = await getHealthSnapshot({
+      rootDir,
+      outDir,
+      profile: 'soc',
+      timeoutMs: 50,
+    });
+
+    expect(health.opensearch_connectivity).toBe('reachable');
+    expect(health.opensearch_http_status).toBe(200);
+    expect(mocks.httpsRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it('supports IPv4 CIDR allowlist entries', async () => {
+    process.env.TRIAGE_OPENSEARCH_HOST_ALLOWLIST = '10.10.0.0/16';
+    mockDryRunSuccess({
+      resolved: {
+        host: 'https://10.10.5.9:9200',
+        verify_tls: true,
+      },
+    });
+    mockHttpsResponse(200);
+
+    const rootDir = makeTempDir('allowlist-cidr-root');
+    const outDir = makeTempDir('allowlist-cidr-out');
+
+    const health = await getHealthSnapshot({
+      rootDir,
+      outDir,
+      profile: 'soc',
+      timeoutMs: 50,
+    });
+
+    expect(health.opensearch_connectivity).toBe('reachable');
+    expect(health.opensearch_http_status).toBe(200);
+    expect(mocks.httpsRequest).toHaveBeenCalledTimes(1);
+  });
+
   it('returns null last_successful_fetch_at when telemetry summary is missing', async () => {
     mockDryRunSuccess({ resolved: {} });
 
@@ -240,5 +327,58 @@ describe('health snapshot', () => {
 
     expect(health.last_successful_fetch_at).toBeNull();
     expect(health.opensearch_connectivity).toBe('not_configured');
+  });
+
+  it('returns cached health snapshots within cache TTL', async () => {
+    process.env.TRIAGE_HEALTH_CACHE_MS = '30000';
+    mockDryRunSuccess({
+      resolved: {
+        host: 'https://indexer.example.local:9200',
+        verify_tls: true,
+      },
+    });
+    mockHttpsResponse(200);
+
+    const rootDir = makeTempDir('cache-root');
+    const outDir = makeTempDir('cache-out');
+    const options = {
+      rootDir,
+      outDir,
+      profile: 'soc' as const,
+      timeoutMs: 50,
+    };
+
+    const first = await getHealthSnapshot(options);
+    const second = await getHealthSnapshot(options);
+
+    expect(first).toEqual(second);
+    expect(mocks.spawn).toHaveBeenCalledTimes(1);
+    expect(mocks.httpsRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables caching when TRIAGE_HEALTH_CACHE_MS=0', async () => {
+    process.env.TRIAGE_HEALTH_CACHE_MS = '0';
+    mockDryRunSuccess({
+      resolved: {
+        host: 'https://indexer.example.local:9200',
+        verify_tls: true,
+      },
+    });
+    mockHttpsResponse(200);
+
+    const rootDir = makeTempDir('cache-disabled-root');
+    const outDir = makeTempDir('cache-disabled-out');
+    const options = {
+      rootDir,
+      outDir,
+      profile: 'soc' as const,
+      timeoutMs: 50,
+    };
+
+    await getHealthSnapshot(options);
+    await getHealthSnapshot(options);
+
+    expect(mocks.spawn).toHaveBeenCalledTimes(2);
+    expect(mocks.httpsRequest).toHaveBeenCalledTimes(2);
   });
 });

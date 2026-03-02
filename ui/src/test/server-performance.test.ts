@@ -84,6 +84,8 @@ describe('server artifact loading performance', () => {
       expect(runsResponse).not.toBeNull();
       expect(runsResponse?.status).toBe(200);
       expect(runsElapsedMs).toBeLessThan(4000);
+      const manifestPath = path.resolve(outDir, '.run-index', 'run_manifest.json');
+      expect(fs.existsSync(manifestPath)).toBe(true);
 
       const caseStartedAt = performance.now();
       const caseResponse = await dispatchApiRequest(
@@ -97,5 +99,5 @@ describe('server artifact loading performance', () => {
     } finally {
       fs.rmSync(outDir, { recursive: true, force: true });
     }
-  });
+  }, 15000);
 });

@@ -94,6 +94,11 @@ describe('API client regression', () => {
     );
 
     await deleteCase('CASE-DELETE-123');
-    expect(fetchMock).toHaveBeenCalledWith('/api/cases/CASE-DELETE-123', { method: 'DELETE' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe('/api/cases/CASE-DELETE-123');
+    expect((init as RequestInit | undefined)?.method).toBe('DELETE');
+    const headers = new Headers((init as RequestInit | undefined)?.headers);
+    expect(headers.get('X-Requested-With')).toBe('XMLHttpRequest');
   });
 });

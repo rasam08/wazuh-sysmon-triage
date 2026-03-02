@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import { createServer, request as httpRequest, type IncomingHttpHeaders, type Server } from 'node:http';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTriageApiMiddleware } from '../../server/lib/routes';
 
 interface RunningServer {
@@ -57,6 +57,72 @@ async function requestApi(
   });
 }
 
+async function requestSseEvents(
+  origin: string,
+  pathname: string,
+  options: { headers?: Record<string, string>; maxEvents?: number } = {},
+): Promise<Array<{ event: string; payload: Record<string, unknown> }>> {
+  return new Promise((resolve, reject) => {
+    const target = new URL(pathname, origin);
+    const req = httpRequest(
+      target,
+      {
+        method: 'GET',
+        headers: options.headers,
+      },
+      (response) => {
+        const maxEvents = options.maxEvents ?? 8;
+        const events: Array<{ event: string; payload: Record<string, unknown> }> = [];
+        let buffer = '';
+
+        const flushBuffer = () => {
+          let delimiter = buffer.indexOf('\n\n');
+          while (delimiter >= 0) {
+            const block = buffer.slice(0, delimiter).trim();
+            buffer = buffer.slice(delimiter + 2);
+            if (!block) {
+              delimiter = buffer.indexOf('\n\n');
+              continue;
+            }
+            const lines = block.split('\n');
+            const eventLine = lines.find((line) => line.startsWith('event:'));
+            const dataLine = lines.find((line) => line.startsWith('data:'));
+            if (!eventLine || !dataLine) {
+              delimiter = buffer.indexOf('\n\n');
+              continue;
+            }
+            const event = eventLine.slice('event:'.length).trim();
+            const data = dataLine.slice('data:'.length).trim();
+            try {
+              const payload = JSON.parse(data) as Record<string, unknown>;
+              events.push({ event, payload });
+            } catch {
+              // Ignore malformed events in tests.
+            }
+            if (event === 'terminal' || events.length >= maxEvents) {
+              req.destroy();
+              resolve(events);
+              return;
+            }
+            delimiter = buffer.indexOf('\n\n');
+          }
+        };
+
+        response.on('data', (chunk) => {
+          buffer += Buffer.isBuffer(chunk) ? chunk.toString('utf-8') : String(chunk);
+          flushBuffer();
+        });
+        response.on('end', () => {
+          flushBuffer();
+          resolve(events);
+        });
+      },
+    );
+    req.on('error', reject);
+    req.end();
+  });
+}
+
 async function startApiServer(options: Parameters<typeof createTriageApiMiddleware>[0]): Promise<RunningServer> {
   const middleware = createTriageApiMiddleware(options);
   const server: Server = createServer((req, res) => {
@@ -90,6 +156,28 @@ async function startApiServer(options: Parameters<typeof createTriageApiMiddlewa
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+let originalEnforceCsrf: string | undefined;
+let originalAsyncRunsEnabled: string | undefined;
+beforeEach(() => {
+  originalEnforceCsrf = process.env.TRIAGE_ENFORCE_CSRF;
+  originalAsyncRunsEnabled = process.env.TRIAGE_ASYNC_RUNS_ENABLED;
+  delete process.env.TRIAGE_ENFORCE_CSRF;
+  delete process.env.TRIAGE_ASYNC_RUNS_ENABLED;
+});
+
+afterEach(() => {
+  if (originalEnforceCsrf === undefined) {
+    delete process.env.TRIAGE_ENFORCE_CSRF;
+  } else {
+    process.env.TRIAGE_ENFORCE_CSRF = originalEnforceCsrf;
+  }
+  if (originalAsyncRunsEnabled === undefined) {
+    delete process.env.TRIAGE_ASYNC_RUNS_ENABLED;
+  } else {
+    process.env.TRIAGE_ASYNC_RUNS_ENABLED = originalAsyncRunsEnabled;
+  }
 });
 
 describe('triage API middleware', () => {
@@ -207,6 +295,154 @@ describe('triage API middleware', () => {
       });
       expect(typeof parsed.ts).toBe('string');
       expect(typeof parsed.duration_ms).toBe('number');
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('exposes Prometheus metrics on /metrics', async () => {
+    const outDir = path.resolve('ui/.tmp-middleware-metrics');
+    fs.rmSync(outDir, { recursive: true, force: true });
+    fs.mkdirSync(outDir, { recursive: true });
+    vi.spyOn(process.stdout, 'write').mockImplementation((_chunk: unknown) => true);
+
+    const server = await startApiServer({ outDir });
+    try {
+      const runsResponse = await requestApi(server.origin, '/api/runs');
+      expect(runsResponse.status).toBe(200);
+      const healthResponse = await requestApi(server.origin, '/api/health?profile=soc');
+      expect(healthResponse.status).toBe(200);
+
+      const metrics = await requestApi(server.origin, '/metrics');
+      expect(metrics.status).toBe(200);
+      expect(getHeader(metrics.headers, 'content-type')).toContain('text/plain');
+      expect(metrics.body).toContain('triage_up 1');
+      expect(metrics.body).toContain('triage_api_requests_total');
+      expect(metrics.body).toContain('triage_api_success_rate_ratio');
+      expect(metrics.body).toContain('triage_run_queue_depth{state="queued"}');
+      expect(metrics.body).toContain('triage_health_requests_total');
+      expect(metrics.body).toContain('route="/api/runs"');
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('enforces CSRF guard for browser mutating requests when enabled', async () => {
+    process.env.TRIAGE_ENFORCE_CSRF = 'true';
+    const outDir = path.resolve('ui/.tmp-middleware-csrf-enforce');
+    fs.rmSync(outDir, { recursive: true, force: true });
+    fs.mkdirSync(outDir, { recursive: true });
+    vi.spyOn(process.stdout, 'write').mockImplementation((_chunk: unknown) => true);
+
+    const server = await startApiServer({ outDir });
+    try {
+      const missingHeader = await requestApi(server.origin, '/api/cases/CASE-CSRF-001', {
+        method: 'DELETE',
+        headers: { Origin: server.origin },
+      });
+      expect(missingHeader.status).toBe(403);
+      expect(JSON.parse(missingHeader.body)).toEqual({
+        error: expect.stringContaining('X-Requested-With'),
+      });
+
+      const sameOrigin = await requestApi(server.origin, '/api/cases/CASE-CSRF-001', {
+        method: 'DELETE',
+        headers: {
+          Origin: server.origin,
+          'X-Requested-With': 'XMLHttpRequest',
+        },
+      });
+      expect([200, 404]).toContain(sameOrigin.status);
+      expect(sameOrigin.status).not.toBe(403);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('rejects cross-origin browser mutating requests when CSRF is enabled', async () => {
+    process.env.TRIAGE_ENFORCE_CSRF = 'true';
+    const outDir = path.resolve('ui/.tmp-middleware-csrf-cross-origin');
+    fs.rmSync(outDir, { recursive: true, force: true });
+    fs.mkdirSync(outDir, { recursive: true });
+    vi.spyOn(process.stdout, 'write').mockImplementation((_chunk: unknown) => true);
+
+    const server = await startApiServer({ outDir });
+    try {
+      const response = await requestApi(server.origin, '/api/cases/CASE-CSRF-002', {
+        method: 'DELETE',
+        headers: {
+          Origin: 'https://evil.example',
+          'X-Requested-With': 'XMLHttpRequest',
+        },
+      });
+      expect(response.status).toBe(403);
+      expect(JSON.parse(response.body)).toEqual({
+        error: expect.stringContaining('Cross-origin'),
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('streams async run progress over SSE', async () => {
+    process.env.TRIAGE_ASYNC_RUNS_ENABLED = 'true';
+    const outDir = path.resolve('ui/.tmp-middleware-async-stream');
+    fs.rmSync(outDir, { recursive: true, force: true });
+    fs.mkdirSync(outDir, { recursive: true });
+    vi.spyOn(process.stdout, 'write').mockImplementation((_chunk: unknown) => true);
+
+    const runner = {
+      previewRun: vi.fn(),
+      startRun: vi.fn(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        return {
+          case_id: 'CASE-STREAM-001',
+          case_dir: path.resolve(outDir, 'CASE-STREAM-001'),
+          log_path: path.resolve(outDir, 'CASE-STREAM-001', 'middleware-run.log'),
+          exit_code: 0,
+          stdout_tail: 'ok',
+          stderr_tail: '',
+          cancelled: false,
+          cancel_reason: null,
+        };
+      }),
+      cancelRun: vi.fn(),
+      isCaseActive: vi.fn(() => false),
+      getActiveCaseId: vi.fn(() => null),
+    };
+
+    const server = await startApiServer({ outDir, runner });
+    try {
+      const submit = await requestApi(server.origin, '/api/runs/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          params: {
+            mode: 'offline',
+            profile: 'soc',
+            time_preset: '2h',
+            queues: ['soc_malware', 'soc_policy'],
+            include_dev_queue: false,
+            min_alert_score: 70,
+            out_dir: outDir,
+            case_id: 'CASE-STREAM-001',
+            dry_run: false,
+            alerts_only: false,
+            print_stats: true,
+            input_file: 'samples/scenario_gym/encoded_powershell.ndjson',
+          },
+        }),
+      });
+      expect(submit.status).toBe(202);
+      const submitPayload = JSON.parse(submit.body) as { job_id: string };
+      expect(typeof submitPayload.job_id).toBe('string');
+
+      const events = await requestSseEvents(server.origin, `/api/runs/jobs/${encodeURIComponent(submitPayload.job_id)}/stream`);
+      expect(events.length).toBeGreaterThan(0);
+      expect(events[0]?.event).toBe('progress');
+      expect(events.some((entry) => entry.event === 'terminal')).toBe(true);
+      const terminal = [...events].reverse().find((entry) => entry.event === 'terminal');
+      expect(terminal?.payload.status).toBe('success');
     } finally {
       await server.close();
     }

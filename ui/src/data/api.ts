@@ -14,6 +14,39 @@ export interface RunPreview {
   warnings: string[];
 }
 
+export interface RunJob {
+  job_id: string;
+  case_id: string;
+  params: RunParams;
+  status: 'queued' | 'running' | 'success' | 'failed' | 'cancelled';
+  stage: string;
+  progress_pct: number;
+  accepted_at: string;
+  started_at?: string;
+  completed_at?: string;
+  duration_ms?: number;
+  message?: string;
+  cancel_reason?: string;
+}
+
+interface RunSubmitResponse {
+  job_id: string;
+  case_id: string;
+  accepted_at: string;
+}
+
+interface RunJobEvent {
+  event: 'progress' | 'terminal';
+  job_id: string;
+  case_id: string;
+  stage: string;
+  progress_pct: number;
+  status: 'queued' | 'running' | 'success' | 'failed' | 'cancelled';
+  ts: string;
+  message?: string;
+  cancel_reason?: string;
+}
+
 class ApiError extends Error {
   status: number;
 
@@ -32,7 +65,21 @@ function apiPath(pathname: string): string {
 }
 
 async function requestJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
-  const response = await fetch(input, init);
+  const method = (init?.method ?? 'GET').toUpperCase();
+  const mutating = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
+  const requestInit = mutating
+    ? (() => {
+      const headers = new Headers(init?.headers);
+      if (!headers.has('X-Requested-With')) {
+        headers.set('X-Requested-With', 'XMLHttpRequest');
+      }
+      return {
+        ...init,
+        headers,
+      } as RequestInit;
+    })()
+    : init;
+  const response = await fetch(input, requestInit);
   const raw = await response.text();
   let payload: unknown;
   try {
@@ -61,11 +108,6 @@ export async function fetchRuns(): Promise<Run[]> {
   return payload.runs;
 }
 
-export async function fetchRun(id: string): Promise<Run | undefined> {
-  const runs = await fetchRuns();
-  return runs.find((run) => run.id === id);
-}
-
 export async function startRun(params: RunParams, init?: RequestInit): Promise<Run> {
   const payload = await requestJson<{ run: Run }>(apiPath('/runs'), {
     ...init,
@@ -77,6 +119,58 @@ export async function startRun(params: RunParams, init?: RequestInit): Promise<R
     body: JSON.stringify({ params }),
   });
   return payload.run;
+}
+
+export async function submitRun(params: RunParams, init?: RequestInit): Promise<RunSubmitResponse> {
+  return requestJson<RunSubmitResponse>(apiPath('/runs/submit'), {
+    ...init,
+    method: 'POST',
+    headers: {
+      ...(init?.headers ?? {}),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ params }),
+  });
+}
+
+export async function fetchJobStatus(jobId: string): Promise<RunJob> {
+  const payload = await requestJson<{ job: RunJob }>(apiPath(`/runs/jobs/${encodeURIComponent(jobId)}`));
+  return payload.job;
+}
+
+export async function cancelJob(jobId: string): Promise<RunJob> {
+  const payload = await requestJson<{ cancelled: boolean; job: RunJob }>(
+    apiPath(`/runs/jobs/${encodeURIComponent(jobId)}/cancel`),
+    { method: 'POST' },
+  );
+  return payload.job;
+}
+
+export function subscribeRunProgress(
+  jobId: string,
+  onEvent: (event: RunJobEvent) => void,
+  onError?: (error: unknown) => void,
+): () => void {
+  if (typeof EventSource === 'undefined') {
+    return () => undefined;
+  }
+  const source = new EventSource(apiPath(`/runs/jobs/${encodeURIComponent(jobId)}/stream`));
+  const handleMessage = (event: MessageEvent) => {
+    try {
+      const payload = JSON.parse(event.data) as RunJobEvent;
+      onEvent(payload);
+    } catch (error) {
+      onError?.(error);
+    }
+  };
+  source.addEventListener('progress', handleMessage as EventListener);
+  source.addEventListener('terminal', handleMessage as EventListener);
+  source.onerror = (error) => {
+    onError?.(error);
+  };
+  return () => {
+    source.close();
+  };
 }
 
 export async function cancelRun(caseId: string): Promise<void> {

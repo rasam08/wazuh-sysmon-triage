@@ -11,8 +11,12 @@ export interface StandaloneServerOptions {
   port?: number;
   bindHost?: string;
   publicBind?: boolean;
+  allowInsecurePublicBind?: boolean;
   authUser?: string;
   authPass?: string;
+  authMaxFailures?: number;
+  authFailureWindowMs?: number;
+  authLockoutMs?: number;
 }
 
 function parsePositiveInt(raw: string | undefined, fallback: number): number {
@@ -31,6 +35,22 @@ function parseBoolean(raw: string | undefined, fallback = false): boolean {
   if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
   return fallback;
 }
+
+interface AuthThrottleOptions {
+  maxFailures: number;
+  windowMs: number;
+  lockoutMs: number;
+}
+
+interface AuthFailureBucket {
+  windowStartMs: number;
+  failures: number;
+  lockedUntilMs: number;
+}
+
+const DEFAULT_AUTH_MAX_FAILURES = 8;
+const DEFAULT_AUTH_FAILURE_WINDOW_MS = 5 * 60 * 1000;
+const DEFAULT_AUTH_LOCKOUT_MS = 2 * 60 * 1000;
 
 function isLoopbackHost(host: string): boolean {
   const normalized = host.trim().toLowerCase();
@@ -88,13 +108,91 @@ function sendUnauthorized(req: Request, res: Response): void {
   res.status(401).send('Authentication required');
 }
 
-function buildAuthMiddleware(user: string, pass: string) {
+function sendAuthRateLimited(req: Request, res: Response, retryAfterSeconds: number): void {
+  res.setHeader('Retry-After', String(retryAfterSeconds));
+  if (req.path.startsWith('/api/')) {
+    res.status(429).json({ error: 'Too many authentication attempts; retry later.' });
+    return;
+  }
+  res.status(429).send('Too many authentication attempts; retry later.');
+}
+
+function sanitizeAuthClientKey(value: string | undefined): string {
+  const trimmed = (value ?? '').trim();
+  if (!trimmed) return 'unknown';
+  return trimmed.slice(0, 128).replace(/[^a-zA-Z0-9:._-]/g, '?');
+}
+
+function resolveAuthClientKey(req: Request): string {
+  const forwardedFor = req.header('x-forwarded-for');
+  if (forwardedFor) {
+    return sanitizeAuthClientKey(forwardedFor.split(',')[0]);
+  }
+  return sanitizeAuthClientKey(req.socket.remoteAddress);
+}
+
+function consumeAuthFailure(
+  buckets: Map<string, AuthFailureBucket>,
+  key: string,
+  nowMs: number,
+  options: AuthThrottleOptions,
+): AuthFailureBucket {
+  const existing = buckets.get(key);
+  if (!existing || nowMs - existing.windowStartMs >= options.windowMs) {
+    const next = {
+      windowStartMs: nowMs,
+      failures: 1,
+      lockedUntilMs: 0,
+    };
+    buckets.set(key, next);
+    return next;
+  }
+  existing.failures += 1;
+  if (existing.failures >= options.maxFailures) {
+    existing.lockedUntilMs = nowMs + options.lockoutMs;
+  }
+  return existing;
+}
+
+function pruneAuthFailureBuckets(
+  buckets: Map<string, AuthFailureBucket>,
+  nowMs: number,
+  options: AuthThrottleOptions,
+): void {
+  if (buckets.size < 128) return;
+  for (const [key, bucket] of buckets.entries()) {
+    if (bucket.lockedUntilMs > nowMs) continue;
+    if (nowMs - bucket.windowStartMs >= options.windowMs) {
+      buckets.delete(key);
+    }
+  }
+}
+
+function buildAuthMiddleware(user: string, pass: string, throttleOptions: AuthThrottleOptions) {
+  const failures = new Map<string, AuthFailureBucket>();
   return (req: Request, res: Response, next: NextFunction): void => {
+    const nowMs = Date.now();
+    const clientKey = resolveAuthClientKey(req);
+    pruneAuthFailureBuckets(failures, nowMs, throttleOptions);
+    const bucket = failures.get(clientKey);
+    if (bucket && bucket.lockedUntilMs > nowMs) {
+      const retryAfterSeconds = Math.max(1, Math.ceil((bucket.lockedUntilMs - nowMs) / 1000));
+      sendAuthRateLimited(req, res, retryAfterSeconds);
+      return;
+    }
+
     const parsed = parseBasicAuth(req.header('authorization'));
     if (!parsed || !safeEqual(parsed.user, user) || !safeEqual(parsed.pass, pass)) {
+      const nextBucket = consumeAuthFailure(failures, clientKey, nowMs, throttleOptions);
+      if (nextBucket.lockedUntilMs > nowMs) {
+        const retryAfterSeconds = Math.max(1, Math.ceil((nextBucket.lockedUntilMs - nowMs) / 1000));
+        sendAuthRateLimited(req, res, retryAfterSeconds);
+        return;
+      }
       sendUnauthorized(req, res);
       return;
     }
+    failures.delete(clientKey);
     next();
   };
 }
@@ -116,11 +214,16 @@ export function createStandaloneApp(options: StandaloneServerOptions = {}) {
 
   const authUser = options.authUser ?? process.env.AUTH_USER;
   const authPass = options.authPass ?? process.env.AUTH_PASS;
+  const authThrottle: AuthThrottleOptions = {
+    maxFailures: options.authMaxFailures ?? parsePositiveInt(process.env.TRIAGE_AUTH_MAX_FAILURES, DEFAULT_AUTH_MAX_FAILURES),
+    windowMs: options.authFailureWindowMs ?? parsePositiveInt(process.env.TRIAGE_AUTH_WINDOW_MS, DEFAULT_AUTH_FAILURE_WINDOW_MS),
+    lockoutMs: options.authLockoutMs ?? parsePositiveInt(process.env.TRIAGE_AUTH_LOCKOUT_MS, DEFAULT_AUTH_LOCKOUT_MS),
+  };
   if ((authUser && !authPass) || (!authUser && authPass)) {
     throw new Error('AUTH_USER and AUTH_PASS must both be provided to enable HTTP Basic auth.');
   }
   if (authUser && authPass) {
-    app.use(buildAuthMiddleware(authUser, authPass));
+    app.use(buildAuthMiddleware(authUser, authPass, authThrottle));
   }
 
   const apiMiddleware = createTriageApiMiddleware({ rootDir, outDir });
@@ -152,9 +255,16 @@ export function startStandaloneServer(options: StandaloneServerOptions = {}) {
   const port = options.port ?? parsePositiveInt(process.env.PORT, 4173);
   const authUser = options.authUser ?? process.env.AUTH_USER;
   const authPass = options.authPass ?? process.env.AUTH_PASS;
+  const allowInsecurePublicBind = options.allowInsecurePublicBind
+    ?? parseBoolean(process.env.TRIAGE_ALLOW_INSECURE_PUBLIC_BIND, false);
   const { bindHost, publicBind } = resolveBindConfig(options);
   if (!isLoopbackHost(bindHost) && !(authUser && authPass)) {
     throw new Error(`Non-local bind host "${bindHost}" requires AUTH_USER and AUTH_PASS.`);
+  }
+  if (!isLoopbackHost(bindHost) && !allowInsecurePublicBind) {
+    throw new Error(
+      `Non-local bind host "${bindHost}" requires TRIAGE_ALLOW_INSECURE_PUBLIC_BIND=true (terminate TLS at a reverse proxy).`,
+    );
   }
 
   const app = createStandaloneApp(options);

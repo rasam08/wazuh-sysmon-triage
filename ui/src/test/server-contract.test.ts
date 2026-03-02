@@ -5,7 +5,7 @@ import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 import { dispatchApiRequest } from '../../server/lib/routes';
-import { createRunner, type SpawnedProcess } from '../../server/lib/runner';
+import { createRunner, type Runner, type SpawnedProcess } from '../../server/lib/runner';
 import type { RunParams } from '../../server/lib/validators';
 
 function writeJson(filePath: string, value: unknown): void {
@@ -342,6 +342,36 @@ function fakeSpawn(delayMs = 30, exitCode = 0) {
   };
 }
 
+async function waitForTerminalJob(
+  outDir: string,
+  jobId: string,
+  options: { rootDir?: string; runner?: Runner; timeoutMs?: number } = {},
+): Promise<{ job: Record<string, unknown> }> {
+  const startedAt = Date.now();
+  const timeoutMs = options.timeoutMs ?? 5000;
+  while (Date.now() - startedAt < timeoutMs) {
+    const response = await dispatchApiRequest(
+      { method: 'GET', url: `/api/runs/jobs/${encodeURIComponent(jobId)}` },
+      {
+        outDir,
+        rootDir: options.rootDir,
+        runner: options.runner,
+      },
+    );
+    if (!response || response.status !== 200) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      continue;
+    }
+    const payload = response.body as { job: Record<string, unknown> };
+    const status = String(payload.job.status ?? '');
+    if (status === 'success' || status === 'failed' || status === 'cancelled') {
+      return payload;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Job ${jobId} did not reach terminal status within ${timeoutMs}ms`);
+}
+
 describe('server contract routes', () => {
   it('supports POST /api/runs then GET /api/cases/:id and GET /api/alerts?case=:id', async () => {
     const outDir = path.resolve('ui/.tmp-server-contract-flow');
@@ -676,6 +706,152 @@ describe('server contract routes', () => {
     expect(fakeRunner.startRun).not.toHaveBeenCalled();
   });
 
+  it('replays POST /api/runs response once per idempotency key', async () => {
+    const outDir = path.resolve('ui/.tmp-server-idempotency-replay');
+    fs.rmSync(outDir, { recursive: true, force: true });
+    fs.mkdirSync(outDir, { recursive: true });
+    const caseId = 'CASE-IDEMPOTENT-001';
+    const idempotencyKey = `test-idempotency-${Date.now()}`;
+
+    const runner = {
+      previewRun: vi.fn(),
+      startRun: vi.fn(async (params: RunParams) => {
+        createCurrentCase(outDir, params.case_id);
+        return {
+          case_id: params.case_id,
+          case_dir: path.resolve(outDir, params.case_id),
+          log_path: path.resolve(outDir, params.case_id, 'middleware-run.log'),
+          exit_code: 0,
+          stdout_tail: 'ok',
+          stderr_tail: '',
+          cancelled: false,
+          cancel_reason: null,
+        };
+      }),
+      cancelRun: vi.fn(),
+      isCaseActive: vi.fn(() => false),
+      getActiveCaseId: vi.fn(() => null),
+    };
+
+    const requestBody = {
+      params: {
+        ...buildParams(outDir, caseId),
+        input_file: 'samples/scenario_gym/encoded_powershell.ndjson',
+      },
+    };
+    const requestHeaders = { 'idempotency-key': idempotencyKey };
+
+    const first = await dispatchApiRequest(
+      {
+        method: 'POST',
+        url: '/api/runs',
+        body: requestBody,
+        headers: requestHeaders,
+      },
+      {
+        rootDir: path.resolve('.'),
+        outDir,
+        runner,
+        offlineInputRoots: ['samples'],
+      },
+    );
+    const second = await dispatchApiRequest(
+      {
+        method: 'POST',
+        url: '/api/runs',
+        body: requestBody,
+        headers: requestHeaders,
+      },
+      {
+        rootDir: path.resolve('.'),
+        outDir,
+        runner,
+        offlineInputRoots: ['samples'],
+      },
+    );
+
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+    expect(first?.status).toBe(200);
+    expect(second?.status).toBe(200);
+    expect(second?.body).toEqual(first?.body);
+    expect(runner.startRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects idempotency-key replay when request body differs', async () => {
+    const outDir = path.resolve('ui/.tmp-server-idempotency-mismatch');
+    fs.rmSync(outDir, { recursive: true, force: true });
+    fs.mkdirSync(outDir, { recursive: true });
+    const idempotencyKey = `test-idempotency-mismatch-${Date.now()}`;
+
+    const runner = {
+      previewRun: vi.fn(),
+      startRun: vi.fn(async (params: RunParams) => {
+        createCurrentCase(outDir, params.case_id);
+        return {
+          case_id: params.case_id,
+          case_dir: path.resolve(outDir, params.case_id),
+          log_path: path.resolve(outDir, params.case_id, 'middleware-run.log'),
+          exit_code: 0,
+          stdout_tail: 'ok',
+          stderr_tail: '',
+          cancelled: false,
+          cancel_reason: null,
+        };
+      }),
+      cancelRun: vi.fn(),
+      isCaseActive: vi.fn(() => false),
+      getActiveCaseId: vi.fn(() => null),
+    };
+
+    const first = await dispatchApiRequest(
+      {
+        method: 'POST',
+        url: '/api/runs',
+        body: {
+          params: {
+            ...buildParams(outDir, 'CASE-IDEMPOTENT-A'),
+            input_file: 'samples/scenario_gym/encoded_powershell.ndjson',
+          },
+        },
+        headers: { 'idempotency-key': idempotencyKey },
+      },
+      {
+        rootDir: path.resolve('.'),
+        outDir,
+        runner,
+        offlineInputRoots: ['samples'],
+      },
+    );
+    expect(first?.status).toBe(200);
+
+    const second = await dispatchApiRequest(
+      {
+        method: 'POST',
+        url: '/api/runs',
+        body: {
+          params: {
+            ...buildParams(outDir, 'CASE-IDEMPOTENT-B'),
+            input_file: 'samples/scenario_gym/encoded_powershell.ndjson',
+          },
+        },
+        headers: { 'idempotency-key': idempotencyKey },
+      },
+      {
+        rootDir: path.resolve('.'),
+        outDir,
+        runner,
+        offlineInputRoots: ['samples'],
+      },
+    );
+    expect(second).not.toBeNull();
+    expect(second?.status).toBe(409);
+    expect(second?.body).toEqual({
+      error: expect.stringContaining('Idempotency-Key'),
+    });
+    expect(runner.startRun).toHaveBeenCalledTimes(1);
+  });
+
   it('returns health payload shape', async () => {
     const outDir = path.resolve('ui/.tmp-health-contract');
     fs.rmSync(outDir, { recursive: true, force: true });
@@ -695,6 +871,258 @@ describe('server contract routes', () => {
     expect(payload.health).toBeTruthy();
     expect(typeof payload.health.opensearch_connectivity).toBe('string');
     expect(payload.health.last_successful_fetch_at).toBe('2026-02-26T01:00:00Z');
+  });
+
+  it('supports async submit and job status lifecycle when feature flag is enabled', async () => {
+    const originalAsyncFlag = process.env.TRIAGE_ASYNC_RUNS_ENABLED;
+    process.env.TRIAGE_ASYNC_RUNS_ENABLED = 'true';
+    const outDir = path.resolve('ui/.tmp-server-async-lifecycle');
+    fs.rmSync(outDir, { recursive: true, force: true });
+    fs.mkdirSync(outDir, { recursive: true });
+    const runner = createRunner({
+      rootDir: path.resolve('.'),
+      spawnProcess: fakeSpawn(80),
+    });
+
+    try {
+      const submitResponse = await dispatchApiRequest(
+        {
+          method: 'POST',
+          url: '/api/runs/submit',
+          body: {
+            params: {
+              ...buildParams(outDir, 'CASE-ASYNC-001'),
+              input_file: 'samples/scenario_gym/encoded_powershell.ndjson',
+            },
+          },
+        },
+        {
+          rootDir: path.resolve('.'),
+          outDir,
+          runner,
+          offlineInputRoots: ['samples'],
+        },
+      );
+      expect(submitResponse).not.toBeNull();
+      expect(submitResponse?.status).toBe(202);
+      const submitPayload = submitResponse?.body as {
+        job_id: string;
+        case_id: string;
+        accepted_at: string;
+      };
+      expect(submitPayload.case_id).toBe('CASE-ASYNC-001');
+      expect(typeof submitPayload.job_id).toBe('string');
+      expect(typeof submitPayload.accepted_at).toBe('string');
+
+      const terminalPayload = await waitForTerminalJob(outDir, submitPayload.job_id, {
+        rootDir: path.resolve('.'),
+        runner,
+      });
+      expect(terminalPayload.job.case_id).toBe('CASE-ASYNC-001');
+      expect(terminalPayload.job.status).toBe('success');
+      const queueDbPath = path.resolve(outDir, '.run-queue', 'run_queue.sqlite3');
+      expect(fs.existsSync(queueDbPath)).toBe(true);
+    } finally {
+      if (originalAsyncFlag === undefined) {
+        delete process.env.TRIAGE_ASYNC_RUNS_ENABLED;
+      } else {
+        process.env.TRIAGE_ASYNC_RUNS_ENABLED = originalAsyncFlag;
+      }
+    }
+  });
+
+  it('recovers legacy queue state file and drains jobs into sqlite-backed state', async () => {
+    const originalAsyncFlag = process.env.TRIAGE_ASYNC_RUNS_ENABLED;
+    process.env.TRIAGE_ASYNC_RUNS_ENABLED = 'true';
+    const outDir = path.resolve('ui/.tmp-server-async-legacy-recovery');
+    fs.rmSync(outDir, { recursive: true, force: true });
+    fs.mkdirSync(path.resolve(outDir, '.run-queue'), { recursive: true });
+    const runner = createRunner({
+      rootDir: path.resolve('.'),
+      spawnProcess: fakeSpawn(80),
+    });
+    const caseId = 'CASE-ASYNC-LEGACY-RECOVERY-001';
+    const jobId = 'job-legacy-recovery-001';
+    const acceptedAt = new Date().toISOString();
+
+    writeJson(path.resolve(outDir, '.run-queue', 'run_queue_state.json'), {
+      version: 1,
+      active_job_id: null,
+      queue: [jobId],
+      jobs: [
+        {
+          job_id: jobId,
+          case_id: caseId,
+          params: {
+            ...buildParams(outDir, caseId),
+            input_file: 'samples/scenario_gym/encoded_powershell.ndjson',
+          },
+          status: 'queued',
+          stage: 'queued',
+          progress_pct: 0,
+          accepted_at: acceptedAt,
+          accepted_at_ms: Date.now(),
+          request_hash: 'legacy-state-hash',
+          idempotency_key: 'legacy-state-key',
+          cancel_requested: false,
+          message: 'Queued',
+        },
+      ],
+    });
+
+    try {
+      const statusResponse = await dispatchApiRequest(
+        {
+          method: 'GET',
+          url: `/api/runs/jobs/${encodeURIComponent(jobId)}`,
+        },
+        {
+          rootDir: path.resolve('.'),
+          outDir,
+          runner,
+        },
+      );
+      expect(statusResponse).not.toBeNull();
+      expect(statusResponse?.status).toBe(200);
+
+      const terminalPayload = await waitForTerminalJob(outDir, jobId, {
+        rootDir: path.resolve('.'),
+        runner,
+        timeoutMs: 8000,
+      });
+      expect(terminalPayload.job.status).toBe('success');
+      expect(fs.existsSync(path.resolve(outDir, '.run-queue', 'run_queue.sqlite3'))).toBe(true);
+      expect(fs.existsSync(path.resolve(outDir, '.run-queue', 'run_queue_state.json'))).toBe(false);
+    } finally {
+      if (originalAsyncFlag === undefined) {
+        delete process.env.TRIAGE_ASYNC_RUNS_ENABLED;
+      } else {
+        process.env.TRIAGE_ASYNC_RUNS_ENABLED = originalAsyncFlag;
+      }
+    }
+  });
+
+  it('supports cancelling async queued jobs by job ID', async () => {
+    const originalAsyncFlag = process.env.TRIAGE_ASYNC_RUNS_ENABLED;
+    process.env.TRIAGE_ASYNC_RUNS_ENABLED = 'true';
+    const outDir = path.resolve('ui/.tmp-server-async-cancel');
+    fs.rmSync(outDir, { recursive: true, force: true });
+    fs.mkdirSync(outDir, { recursive: true });
+    const runner = createRunner({
+      rootDir: path.resolve('.'),
+      spawnProcess: fakeSpawn(400),
+    });
+
+    try {
+      const submitResponse = await dispatchApiRequest(
+        {
+          method: 'POST',
+          url: '/api/runs/submit',
+          body: {
+            params: {
+              ...buildParams(outDir, 'CASE-ASYNC-CANCEL-001'),
+              input_file: 'samples/scenario_gym/encoded_powershell.ndjson',
+            },
+          },
+        },
+        {
+          rootDir: path.resolve('.'),
+          outDir,
+          runner,
+          offlineInputRoots: ['samples'],
+        },
+      );
+      expect(submitResponse?.status).toBe(202);
+      const jobId = (submitResponse?.body as { job_id: string }).job_id;
+
+      const cancelResponse = await dispatchApiRequest(
+        {
+          method: 'POST',
+          url: `/api/runs/jobs/${encodeURIComponent(jobId)}/cancel`,
+        },
+        {
+          rootDir: path.resolve('.'),
+          outDir,
+          runner,
+        },
+      );
+      expect(cancelResponse).not.toBeNull();
+      expect(cancelResponse?.status).toBe(202);
+      const cancelPayload = cancelResponse?.body as { cancelled: boolean; job: Record<string, unknown> };
+      expect(cancelPayload.cancelled).toBe(true);
+      expect(cancelPayload.job.status).toMatch(/queued|running|cancelled/);
+
+      const terminalPayload = await waitForTerminalJob(outDir, jobId, {
+        rootDir: path.resolve('.'),
+        runner,
+        timeoutMs: 8000,
+      });
+      expect(terminalPayload.job.status).toBe('cancelled');
+    } finally {
+      if (originalAsyncFlag === undefined) {
+        delete process.env.TRIAGE_ASYNC_RUNS_ENABLED;
+      } else {
+        process.env.TRIAGE_ASYNC_RUNS_ENABLED = originalAsyncFlag;
+      }
+    }
+  });
+
+  it('supports GET /api/runs query params for status, mode, limit, and offset', async () => {
+    const originalAsyncFlag = process.env.TRIAGE_ASYNC_RUNS_ENABLED;
+    process.env.TRIAGE_ASYNC_RUNS_ENABLED = 'true';
+    const outDir = path.resolve('ui/.tmp-server-runs-query-params');
+    fs.rmSync(outDir, { recursive: true, force: true });
+    fs.mkdirSync(outDir, { recursive: true });
+    const runner = createRunner({
+      rootDir: path.resolve('.'),
+      spawnProcess: fakeSpawn(300),
+    });
+
+    try {
+      const submitResponse = await dispatchApiRequest(
+        {
+          method: 'POST',
+          url: '/api/runs/submit',
+          body: {
+            params: {
+              ...buildParams(outDir, 'CASE-QUERY-001'),
+              input_file: 'samples/scenario_gym/encoded_powershell.ndjson',
+            },
+          },
+        },
+        {
+          rootDir: path.resolve('.'),
+          outDir,
+          runner,
+          offlineInputRoots: ['samples'],
+        },
+      );
+      expect(submitResponse?.status).toBe(202);
+
+      const runsResponse = await dispatchApiRequest(
+        {
+          method: 'GET',
+          url: '/api/runs?mode=offline&limit=10&offset=0',
+        },
+        {
+          rootDir: path.resolve('.'),
+          outDir,
+          runner,
+        },
+      );
+      expect(runsResponse).not.toBeNull();
+      expect(runsResponse?.status).toBe(200);
+      const runsPayload = runsResponse?.body as { runs: Array<Record<string, unknown>> };
+      expect(Array.isArray(runsPayload.runs)).toBe(true);
+      expect(runsPayload.runs.some((run) => run.id === 'CASE-QUERY-001')).toBe(true);
+      expect(runsPayload.runs.every((run) => (run.params as Record<string, unknown>).mode === 'offline')).toBe(true);
+    } finally {
+      if (originalAsyncFlag === undefined) {
+        delete process.env.TRIAGE_ASYNC_RUNS_ENABLED;
+      } else {
+        process.env.TRIAGE_ASYNC_RUNS_ENABLED = originalAsyncFlag;
+      }
+    }
   });
 });
 

@@ -134,6 +134,50 @@ describe('standalone express server', () => {
     }
   });
 
+  it('rate-limits repeated failed auth attempts from the same client', async () => {
+    const outDir = makeTempDir('out-auth-throttle');
+    const distDir = makeTempDir('dist-auth-throttle');
+    fs.writeFileSync(path.resolve(distDir, 'index.html'), '<html><body>auth-throttle</body></html>', 'utf-8');
+
+    const app = createStandaloneApp({
+      rootDir: path.resolve('.'),
+      outDir,
+      distDir,
+      authUser: 'analyst',
+      authPass: 'secret',
+      authMaxFailures: 2,
+      authFailureWindowMs: 60_000,
+      authLockoutMs: 120_000,
+    });
+    const server = await startApp(app);
+    try {
+      const wrongAuth = Buffer.from('analyst:wrong').toString('base64');
+      const first = await requestText(server.origin, '/api/runs', {
+        headers: { Authorization: `Basic ${wrongAuth}` },
+      });
+      expect(first.status).toBe(401);
+
+      const second = await requestText(server.origin, '/api/runs', {
+        headers: { Authorization: `Basic ${wrongAuth}` },
+      });
+      expect(second.status).toBe(429);
+      expect(getHeader(second.headers, 'retry-after')).toBeTruthy();
+
+      const third = await requestText(server.origin, '/api/runs', {
+        headers: { Authorization: `Basic ${wrongAuth}` },
+      });
+      expect(third.status).toBe(429);
+
+      const correctAuth = Buffer.from('analyst:secret').toString('base64');
+      const blockedCorrect = await requestText(server.origin, '/api/runs', {
+        headers: { Authorization: `Basic ${correctAuth}` },
+      });
+      expect(blockedCorrect.status).toBe(429);
+    } finally {
+      await server.close();
+    }
+  });
+
   it('rejects non-local bind without auth credentials', () => {
     const outDir = makeTempDir('out-public-no-auth');
     const distDir = makeTempDir('dist-public-no-auth');
@@ -161,6 +205,7 @@ describe('standalone express server', () => {
       port: 0,
       bindHost: '0.0.0.0',
       publicBind: true,
+      allowInsecurePublicBind: true,
       authUser: 'analyst',
       authPass: 'secret',
     });
@@ -180,5 +225,22 @@ describe('standalone express server', () => {
         resolve();
       });
     });
+  });
+
+  it('rejects non-local bind without explicit insecure transport opt-in', () => {
+    const outDir = makeTempDir('out-public-no-transport-opt-in');
+    const distDir = makeTempDir('dist-public-no-transport-opt-in');
+    fs.writeFileSync(path.resolve(distDir, 'index.html'), '<html><body>public-transport</body></html>', 'utf-8');
+
+    expect(() => startStandaloneServer({
+      rootDir: path.resolve('.'),
+      outDir,
+      distDir,
+      port: 0,
+      bindHost: '0.0.0.0',
+      publicBind: true,
+      authUser: 'analyst',
+      authPass: 'secret',
+    })).toThrow(/TRIAGE_ALLOW_INSECURE_PUBLIC_BIND=true/i);
   });
 });

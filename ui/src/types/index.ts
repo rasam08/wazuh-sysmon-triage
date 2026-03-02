@@ -133,7 +133,7 @@ export interface RunMetadata {
   stages: StageResult[];
 }
 
-export interface StageResult {
+interface StageResult {
   name: string;
   started_at: string;
   completed_at: string;
@@ -194,13 +194,18 @@ export interface HealthStatus {
 }
 
 /* ─── Run State (UI) ─── */
-export type RunStatus = 'pending' | 'running' | 'success' | 'failed';
+export type RunStatus = 'pending' | 'running' | 'success' | 'failed' | 'cancelled';
 export type RunStage = 'fetch' | 'normalize' | 'correlate' | 'detect' | 'render';
 
 export interface Run {
   id: string;
   params: RunParams;
   status: RunStatus;
+  job_id?: string;
+  queued_at?: string;
+  progress_pct?: number;
+  eta_seconds?: number;
+  cancel_reason?: string;
   current_stage?: RunStage;
   started_at: string;
   completed_at?: string;
