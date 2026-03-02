@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build
+          npm --prefix ui ci
+
+      - name: Build Python package
+        run: python -m build
+
+      - name: Build UI bundle
+        run: npm --prefix ui run build
+
+      - name: Package UI artifact
+        run: |
+          tar -czf ui-dist.tar.gz -C ui dist
+
+      - name: Generate release notes
+        run: |
+          cat > release-notes.md <<'EOF'
+          ## Release Notes
+
+          Automated release for tag `${{ github.ref_name }}`.
+
+          Included artifacts:
+          - Python distributions from `dist/`
+          - UI build archive `ui-dist.tar.gz`
+          EOF
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: release-notes.md
+          files: |
+            dist/*
+            ui-dist.tar.gz

@@ -154,6 +154,8 @@ Structured JSON logging remains intact in `run.log.ndjson`.
 - `docs/OUTPUTS.md`
 - `docs/PROJECT_BLUEPRINT.md`
 - `docs/API_CONTRACT.md`
+- `docs/QUALITY_SCORECARD.md`
+- `docs/BRANCH_PROTECTION.md`
 - `docs/OUTPUT_SCHEMA_COMPAT.md`
 - `docs/TROUBLESHOOTING.md`
 - `docs/SIGNAL_MODEL.md`
@@ -187,12 +189,13 @@ For non-local access, set `PUBLIC_BIND=true` and provide auth credentials:
 ```powershell
 $env:PUBLIC_BIND = "true"
 $env:BIND_HOST = "0.0.0.0"
+$env:TRIAGE_ALLOW_INSECURE_PUBLIC_BIND = "true"
 $env:AUTH_USER = "analyst"
 $env:AUTH_PASS = "changeme"
 npm --prefix ui start
 ```
 
-Non-loopback binds are rejected unless `PUBLIC_BIND=true` and `AUTH_USER`/`AUTH_PASS` are both set.
+Non-loopback binds are rejected unless `PUBLIC_BIND=true`, `AUTH_USER`/`AUTH_PASS` are both set, and `TRIAGE_ALLOW_INSECURE_PUBLIC_BIND=true`.
 
 The UI server auto-detects the artifacts directory when `--out-dir` is not provided. It checks `out` first, then `output`, preferring whichever already contains case artifacts. The recommended convention is `out`, but earlier runs under `output` are still discovered automatically.
 

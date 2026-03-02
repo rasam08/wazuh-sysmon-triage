@@ -18,6 +18,7 @@ All error responses use:
 Common statuses:
 
 - `400` invalid JSON/params/case id
+- `403` CSRF or origin policy rejection (when enabled)
 - `404` case/bundle/route not found
 - `408` run timeout
 - `409` run conflict (already running, overwrite denied, active-case delete blocked)
@@ -47,11 +48,22 @@ Common statuses:
 
 ### `GET /api/runs`
 
+Optional query params (all additive):
+
+- `limit=<n>`
+- `offset=<n>`
+- `status=<pending|running|success|failed|cancelled>`
+- `mode=<live|offline>`
+
 Response:
 
 ```json
 { "runs": [Run] }
 ```
+
+Implementation note:
+- Responses are cached using a run index manifest (`.run-index/run_manifest.json`) with a short TTL.
+- Mutating run/case routes invalidate the manifest cache.
 
 ### `POST /api/runs`
 
@@ -63,6 +75,10 @@ Request body:
 
 Unknown fields are ignored and never forwarded to spawn.
 
+Optional headers:
+
+- `Idempotency-Key: <token>` to safely replay identical submits within the idempotency retention window.
+
 Behavior:
 
 - validates/coerces params
@@ -70,6 +86,9 @@ Behavior:
 - enforces run mutex
 - enforces overwrite policy
 - spawns `python -m wazuh_sysmon_triage ...`
+- when `Idempotency-Key` is present:
+  - identical replay returns the original response without starting a second run
+  - same key with a different body is rejected with `409`
 
 Response:
 
@@ -170,6 +189,114 @@ Returns runtime health from middleware perspective:
   }
 }
 ```
+
+Health probe host policy:
+- If `TRIAGE_OPENSEARCH_HOST_ALLOWLIST` is configured, the resolved OpenSearch host must match an allowlist rule (exact host, `*.suffix`, or IPv4 CIDR) before any network call is attempted.
+- Disallowed hosts are returned as `opensearch_connectivity: "unreachable"` with an error token like `host_not_allowlisted:<host>`.
+
+### `POST /api/runs/submit` (feature flag)
+
+Async run submit endpoint gated by `TRIAGE_ASYNC_RUNS_ENABLED`.
+
+- disabled flag: treated as unknown route (`404`)
+- enabled flag: accepts run and queues execution (`202`)
+
+Request body:
+
+```json
+{ "params": RunParams }
+```
+
+Optional headers:
+
+- `Idempotency-Key: <token>` for stable replay of identical submit bodies.
+
+Response:
+
+```json
+{
+  "job_id": "uuid",
+  "case_id": "CASE-...",
+  "accepted_at": "2026-02-28T20:00:00.000Z"
+}
+```
+
+Implementation note:
+- Queue orchestration state is durably persisted under `.run-queue/run_queue.sqlite3`.
+- If SQLite persistence is unavailable, middleware falls back to legacy `.run-queue/run_queue_state.json`.
+
+### `GET /api/runs/jobs/:jobId`
+
+Returns job lifecycle state:
+
+```json
+{
+  "job": {
+    "job_id": "uuid",
+    "case_id": "CASE-...",
+    "status": "queued|running|success|failed|cancelled",
+    "stage": "queued|running|completed|failed|cancelled",
+    "progress_pct": 0,
+    "accepted_at": "2026-02-28T20:00:00.000Z"
+  }
+}
+```
+
+### `POST /api/runs/jobs/:jobId/cancel`
+
+Requests cancellation for queued/running async jobs.
+
+Response:
+
+```json
+{
+  "cancelled": true,
+  "job": { "job_id": "uuid", "status": "cancelled" }
+}
+```
+
+### `GET /api/runs/jobs/:jobId/stream`
+
+SSE progress stream (`text/event-stream`) for async jobs.
+
+Event payload schema:
+
+```json
+{
+  "event": "progress|terminal",
+  "job_id": "uuid",
+  "case_id": "CASE-...",
+  "stage": "queued|running|completed|failed|cancelled",
+  "progress_pct": 0,
+  "status": "queued|running|success|failed|cancelled",
+  "ts": "2026-02-28T20:00:00.000Z",
+  "message": "optional",
+  "cancel_reason": "optional"
+}
+```
+
+### `GET /metrics`
+
+Prometheus-compatible runtime metrics endpoint (also available at `/api/metrics`).
+
+Includes:
+- request totals/errors/success ratio
+- per-route request and latency counters
+- run queue depth and job status counts
+- run submit/cancel counters
+- health endpoint request counter
+
+Health responses are cached by `(rootDir, outDir, profile)` per `TRIAGE_HEALTH_CACHE_MS` using stale-while-revalidate semantics.
+
+## Browser mutation CSRF policy
+
+When `TRIAGE_ENFORCE_CSRF=true`, browser-origin mutating requests (`POST`, `PUT`, `PATCH`, `DELETE`) must satisfy:
+
+- `X-Requested-With: XMLHttpRequest`
+- `Origin` must match request host/protocol (when `Origin` is present)
+- `Sec-Fetch-Site` must be `same-origin`, `same-site`, or `none` (when present)
+
+Non-browser/internal calls without browser-origin headers remain supported.
 
 ## `/api/v1` alias policy
 

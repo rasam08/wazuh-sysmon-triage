@@ -21,6 +21,7 @@ docker run --rm -p 4173:4173 \
   -e PORT=4173 \
   -e PUBLIC_BIND=true \
   -e BIND_HOST=0.0.0.0 \
+  -e TRIAGE_ALLOW_INSECURE_PUBLIC_BIND=true \
   -e AUTH_USER=analyst \
   -e AUTH_PASS=changeme \
   -e WAZUH_OS_HOST=https://indexer:9200 \
@@ -33,6 +34,9 @@ docker run --rm -p 4173:4173 \
 Notes:
 
 - Server defaults to loopback bind (`127.0.0.1`). For container or remote access, set `PUBLIC_BIND=true` and provide non-empty `AUTH_USER`/`AUTH_PASS`.
+- Non-loopback binds also require `TRIAGE_ALLOW_INSECURE_PUBLIC_BIND=true` because the standalone app serves HTTP directly. Use this only behind a trusted TLS-terminating reverse proxy/network boundary.
+- Basic auth brute-force throttling is enabled by default. Tune with `TRIAGE_AUTH_MAX_FAILURES`, `TRIAGE_AUTH_WINDOW_MS`, and `TRIAGE_AUTH_LOCKOUT_MS` if needed.
+- Optionally constrain OpenSearch health probe targets with `TRIAGE_OPENSEARCH_HOST_ALLOWLIST` (exact hosts, `*.suffix`, and IPv4 CIDR).
 - Container output artifacts are written under `/app/out`, mapped above to local `./out`.
 
 ## Docker Compose
@@ -50,6 +54,7 @@ AUTH_USER=analyst
 AUTH_PASS=changeme
 PUBLIC_BIND=true
 BIND_HOST=0.0.0.0
+TRIAGE_ALLOW_INSECURE_PUBLIC_BIND=true
 ```
 
 Override auth at runtime without editing compose:
