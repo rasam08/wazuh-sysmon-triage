@@ -35,6 +35,8 @@ ui/playwright-report/
 ui/test-results/
 ui/node_modules/
 ui/ui/.tmp-*/
+.tmp_release_gate_out/
+tmp-out/
 
 # Local config (may contain credentials)
 config.local.yaml

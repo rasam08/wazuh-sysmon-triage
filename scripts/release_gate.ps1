@@ -15,10 +15,26 @@ function Resolve-PythonExe {
         ".\.venv-1\Scripts\python.exe",
         "python"
     )
+    $existingCandidates = @()
     foreach ($candidate in $candidates) {
         if ($candidate -eq "python" -or (Test-Path $candidate)) {
-            return $candidate
+            $existingCandidates += $candidate
         }
+    }
+
+    foreach ($candidate in $existingCandidates) {
+        try {
+            & $candidate -c "import pytest" 1>$null 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                return $candidate
+            }
+        } catch {
+            continue
+        }
+    }
+
+    if ($existingCandidates.Count -gt 0) {
+        return $existingCandidates[0]
     }
     return "python"
 }

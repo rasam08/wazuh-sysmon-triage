@@ -3,14 +3,14 @@ from wazuh_sysmon_triage.logging import _redact_sensitive
 
 def test_redact_sensitive_nested_keys() -> None:
     payload = {
-        "password": "root",
+        "password": "root",  # pragma: allowlist secret
         "headers": {
             "Authorization": "Bearer x",
             "x-api-key": "visible",
         },
         "nested": {
             "token": "abc",
-            "items": [{"secret": "one"}, {"ok": "two"}],
+            "items": [{"secret": "one"}, {"ok": "two"}],  # pragma: allowlist secret
         },
     }
 

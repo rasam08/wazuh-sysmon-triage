@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import json
 import shutil
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 TELEMETRY_HISTORY_FILE = "telemetry_history.ndjson"
 TELEMETRY_SUMMARY_FILE = "telemetry_summary.json"
+_TELEMETRY_LOCKS: dict[str, threading.Lock] = {}
+_TELEMETRY_LOCKS_GUARD = threading.Lock()
 
 
 def parse_optional_bool(value: str | None) -> bool | None:
@@ -48,6 +52,23 @@ def _now_iso() -> str:
     return datetime.now(tz=UTC).isoformat().replace("+00:00", "Z")
 
 
+def _write_text_atomic(path: Path, payload: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    tmp_path.write_text(payload, encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def _get_telemetry_lock(root: Path) -> threading.Lock:
+    lock_key = str(root.resolve())
+    with _TELEMETRY_LOCKS_GUARD:
+        lock = _TELEMETRY_LOCKS.get(lock_key)
+        if lock is None:
+            lock = threading.Lock()
+            _TELEMETRY_LOCKS[lock_key] = lock
+        return lock
+
+
 def _read_json_lines(path: Path, max_entries: int = 5000) -> list[dict[str, Any]]:
     if not path.exists():
         return []
@@ -64,10 +85,7 @@ def _read_json_lines(path: Path, max_entries: int = 5000) -> list[dict[str, Any]
             rows.append(payload)
     if len(rows) > max_entries:
         rows = rows[-max_entries:]
-        path.write_text(
-            "\n".join(json.dumps(row, separators=(",", ":")) for row in rows) + "\n",
-            encoding="utf-8",
-        )
+        _write_text_atomic(path, "\n".join(json.dumps(row, separators=(",", ":")) for row in rows) + "\n")
     return rows
 
 
@@ -133,6 +151,7 @@ def record_run_telemetry(
 ) -> dict[str, Any]:
     root = Path(out_root)
     root.mkdir(parents=True, exist_ok=True)
+    lock = _get_telemetry_lock(root)
 
     history_path = root / TELEMETRY_HISTORY_FILE
     summary_path = root / TELEMETRY_SUMMARY_FILE
@@ -148,13 +167,14 @@ def record_run_telemetry(
         "failure_reason": failure_reason if failure_reason else None,
     }
 
-    with history_path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, separators=(",", ":")) + "\n")
+    with lock:
+        with history_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, separators=(",", ":")) + "\n")
 
-    history = _read_json_lines(history_path)
-    summary = build_telemetry_summary(history)
-    summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    return summary
+        history = _read_json_lines(history_path)
+        summary = build_telemetry_summary(history)
+        _write_text_atomic(summary_path, json.dumps(summary, indent=2))
+        return summary
 
 
 def _directory_size_bytes(directory: Path) -> int:
