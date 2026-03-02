@@ -1,11 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { ToastContainer } from '@/components';
 import { GlobalProgressBar } from '@/components/GlobalProgressBar';
 import { CommandPalette } from '@/components/CommandPalette';
+import { OnboardingTour } from '@/components/OnboardingTour';
 import { useRunsStore, useSettingsStore, useAlertsStore } from '@/stores';
 import { fetchHealth } from '@/data/api';
 import type { HealthStatus } from '@/types';
+import {
+  ONBOARDING_RESET_EVENT,
+  isOnboardingComplete,
+  markOnboardingComplete,
+} from '@/utils/onboarding';
 
 // ─── Icons ──────────────────────────────────────────────────────────────────
 function IcoDashboard() {
@@ -150,12 +156,14 @@ function SideNavItem({
 
 // ─── AppLayout ───────────────────────────────────────────────────────────────
 export function AppLayout() {
+  const navigate = useNavigate();
   const { runs, fetchRuns } = useRunsStore();
   const display = useSettingsStore((s) => s.display);
   const alertsLoading = useAlertsStore((s) => s.loading);
   const runsLoading = useRunsStore((s) => s.loading);
   const [systemTheme, setSystemTheme] = useState<'dark' | 'light'>('dark');
   const [health, setHealth] = useState<HealthStatus | null>(null);
+  const [showOnboarding, setShowOnboarding] = useState(false);
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     try { return localStorage.getItem('sidebar-collapsed') === '1'; } catch { return false; }
   });
@@ -174,6 +182,18 @@ export function AppLayout() {
       void fetchRuns();
     }
   }, [fetchRuns]);
+
+  useEffect(() => {
+    if (!isOnboardingComplete()) {
+      setShowOnboarding(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    const onReset = () => setShowOnboarding(true);
+    window.addEventListener(ONBOARDING_RESET_EVENT, onReset);
+    return () => window.removeEventListener(ONBOARDING_RESET_EVENT, onReset);
+  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.matchMedia) return;
@@ -231,6 +251,11 @@ export function AppLayout() {
       : health.opensearch_connectivity === 'unreachable' ? 'error'
       : 'unknown')
     : 'unknown';
+
+  const dismissOnboarding = () => {
+    markOnboardingComplete();
+    setShowOnboarding(false);
+  };
 
   // Compute badge counts for nav items
   const runningCount = runs.filter((r) => r.status === 'running').length;
@@ -337,6 +362,14 @@ export function AppLayout() {
 
       <CommandPalette />
       <ToastContainer />
+      <OnboardingTour
+        open={showOnboarding}
+        onDismiss={dismissOnboarding}
+        onStartRun={() => {
+          dismissOnboarding();
+          navigate('/new-run');
+        }}
+      />
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 
-export function NotFoundScreen() {
+function NotFoundScreen() {
   const navigate = useNavigate();
 
   return (

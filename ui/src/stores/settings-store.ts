@@ -86,7 +86,7 @@ export interface ExportConfig {
 }
 
 /* Combined settings state */
-export interface SettingsState {
+interface SettingsState {
   api: ApiEndpointConfig;
   presets: RunPreset[];
   thresholds: AlertThresholds;

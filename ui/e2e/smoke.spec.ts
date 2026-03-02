@@ -105,6 +105,9 @@ async function fulfillJson(route: Route, status: number, body: unknown): Promise
 
 test.beforeEach(async ({ page }) => {
   runsShouldFail = false;
+  await page.addInitScript(() => {
+    window.localStorage.setItem('wst-onboarding-v1-complete', '1');
+  });
   await page.route('**/api/**', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -213,4 +216,20 @@ test('dashboard shows error state when runs API fails', async ({ page }) => {
 
   await page.goto('/dashboard');
   await expect(page.getByText('Internal server error')).toBeVisible();
+});
+
+test('alert deep-link route opens selected alert drawer', async ({ page }) => {
+  await page.goto(`/alerts/A001?case=${encodeURIComponent(DEFAULT_CASE_ID)}`);
+  await expect(page).toHaveURL(/\/alerts\/A001\?case=/);
+  await expect(page.getByRole('dialog', { name: 'Alert A001' })).toBeVisible();
+  await page.getByRole('button', { name: 'Close drawer' }).click();
+  await expect(page).toHaveURL(/\/alerts\?case=/);
+});
+
+test('onboarding appears once and can be reset from settings', async ({ page }) => {
+  await page.goto('/settings');
+  await page.getByRole('button', { name: 'Reset Onboarding' }).click();
+  await expect(page.getByRole('dialog', { name: 'Onboarding tour' })).toBeVisible();
+  await page.getByRole('button', { name: 'Skip Tour' }).click();
+  await expect(page.getByRole('dialog', { name: 'Onboarding tour' })).not.toBeVisible();
 });

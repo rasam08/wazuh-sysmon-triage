@@ -44,6 +44,7 @@ function renderAlerts(route: string) {
     <MemoryRouter initialEntries={[route]}>
       <Routes>
         <Route path="/alerts" element={<AlertWorkbenchScreen />} />
+        <Route path="/alerts/:alertId" element={<AlertWorkbenchScreen />} />
       </Routes>
     </MemoryRouter>,
   );

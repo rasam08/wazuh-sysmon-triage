@@ -72,7 +72,7 @@ export function ScoreBadge({ score }: { score: number }) {
 /* ─── Status Badge ─── */
 export function StatusBadge({ status }: { status: string }) {
   const map: Record<string, BadgeProps['variant']> = {
-    success: 'success', running: 'info', pending: 'muted', failed: 'danger',
+    success: 'success', running: 'info', pending: 'muted', failed: 'danger', cancelled: 'warning',
   };
   return <Badge variant={map[status] ?? 'default'}>{status}</Badge>;
 }

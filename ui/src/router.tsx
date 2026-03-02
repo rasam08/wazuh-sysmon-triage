@@ -33,6 +33,7 @@ export const router = createBrowserRouter([
       { path: 'runs', element: withSuspense(<RunsDashboardScreen />) },
       { path: 'cases', element: withSuspense(<CaseListScreen />) },
       { path: 'cases/:caseId', element: withSuspense(<CaseOverviewScreen />) },
+      { path: 'alerts/:alertId', element: withSuspense(<AlertWorkbenchScreen />) },
       { path: 'alerts', element: withSuspense(<AlertWorkbenchScreen />) },
       { path: 'simulate', element: withSuspense(<SimulateScreen />) },
       { path: 'settings', element: withSuspense(<SettingsScreen />) },

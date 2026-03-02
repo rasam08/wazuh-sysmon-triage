@@ -11,7 +11,7 @@ interface ConfirmModalProps {
   variant?: 'danger' | 'primary';
 }
 
-export function ConfirmModal({ open, title, message, confirmLabel = 'Confirm', onConfirm, onCancel, variant = 'danger' }: ConfirmModalProps) {
+function ConfirmModal({ open, title, message, confirmLabel = 'Confirm', onConfirm, onCancel, variant = 'danger' }: ConfirmModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
 

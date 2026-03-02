@@ -69,6 +69,7 @@ describe('SettingsScreen', () => {
     renderSettings();
     expect(screen.getByText('Export Settings')).toBeInTheDocument();
     expect(screen.getByText('Import Settings')).toBeInTheDocument();
+    expect(screen.getByText('Reset Onboarding')).toBeInTheDocument();
     expect(screen.getByText('Reset All')).toBeInTheDocument();
   });
 });

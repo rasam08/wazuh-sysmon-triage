@@ -9,7 +9,7 @@ import type {
 const VALID_QUEUES = new Set(['soc_malware', 'soc_policy', 'soc_dev', 'soc_info']);
 const VALID_CONFIDENCE = new Set(['low', 'medium', 'high']);
 
-export interface ScenarioEvaluationResult {
+interface ScenarioEvaluationResult {
   passed: boolean;
   error?: string;
 }

@@ -34,7 +34,7 @@ function generateCaseId() {
 
 export default function NewRunScreen() {
   const navigate = useNavigate();
-  const startRun = useRunsStore((s) => s.startRun);
+  const submitRun = useRunsStore((s) => s.submitRun);
   const selectedRunId = useRunsStore((s) => s.selectedRunId);
   const runs = useRunsStore((s) => s.runs);
   const addToast = useToastStore((s) => s.addToast);
@@ -167,8 +167,8 @@ export default function NewRunScreen() {
 
     const params = buildParams();
     try {
-      const runId = await startRun(params);
-      addToast('success', `Run completed: ${caseId}`);
+      const runId = await submitRun(params);
+      addToast('success', `Run queued: ${caseId}`);
       setShowSuccess(true);
       setTimeout(() => {
         setShowSuccess(false);

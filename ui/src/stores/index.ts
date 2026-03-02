@@ -13,7 +13,6 @@ import * as api from '@/data/api';
 import { useSettingsStore } from './settings-store';
 
 export { useSettingsStore };
-export type { RunPreset, SettingsState } from './settings-store';
 
 function applyAlertPolicies(alerts: Alert[]): Alert[] {
   const settings = useSettingsStore.getState();
@@ -71,87 +70,283 @@ interface RunsState {
   error: string | null;
   fetchRuns: () => Promise<void>;
   selectRun: (id: string | null) => void;
+  submitRun: (params: RunParams) => Promise<string>;
+  fetchJobStatus: (jobId: string) => Promise<void>;
+  subscribeRunProgress: (jobId: string) => (() => void);
   startRun: (params: RunParams) => Promise<string>;
   cancelRun: (caseId: string) => Promise<void>;
 }
 
-export const useRunsStore = create<RunsState>((set, get) => ({
-  runs: [],
-  selectedRunId: null,
-  loading: false,
-  error: null,
+const activeJobPollers = new Map<string, ReturnType<typeof setInterval>>();
+const activeJobStreams = new Map<string, () => void>();
+const JOB_POLL_INTERVAL_MS = 2000;
+const JOB_STREAM_FALLBACK_POLL_INTERVAL_MS = 15000;
 
-  fetchRuns: async () => {
-    set({ loading: true, error: null });
-    try {
-      const runs = await api.fetchRuns();
-      set({ runs, loading: false });
-    } catch (e) {
-      set({ error: (e as Error).message, loading: false });
-    }
-  },
+function stopJobPoller(jobId: string): void {
+  const timer = activeJobPollers.get(jobId);
+  if (!timer) return;
+  clearInterval(timer);
+  activeJobPollers.delete(jobId);
+}
 
-  selectRun: (id) => set({ selectedRunId: id }),
+function stopJobStream(jobId: string): void {
+  const unsubscribe = activeJobStreams.get(jobId);
+  if (!unsubscribe) return;
+  unsubscribe();
+  activeJobStreams.delete(jobId);
+}
 
-  startRun: async (params: RunParams) => {
-    const runId = params.case_id;
-    const pending: Run = {
-      id: runId,
-      params,
-      status: 'running',
-      started_at: new Date().toISOString(),
-      alert_count: 0,
-    };
-    set((s) => ({
-      runs: [pending, ...s.runs.filter((r) => r.id !== runId)],
-      selectedRunId: runId,
+function mapJobStatusToRunStatus(status: api.RunJob['status']): Run['status'] {
+  if (status === 'queued') return 'pending';
+  if (status === 'cancelled') return 'cancelled';
+  return status;
+}
+
+function toRunFromJob(job: api.RunJob): Run {
+  const startedAt = job.started_at ?? job.accepted_at;
+  const progress = job.progress_pct;
+  const etaSeconds = estimateEtaSeconds(progress, startedAt);
+  return {
+    id: job.case_id,
+    params: job.params,
+    status: mapJobStatusToRunStatus(job.status),
+    started_at: startedAt,
+    completed_at: job.completed_at,
+    duration_ms: job.duration_ms,
+    job_id: job.job_id,
+    queued_at: job.accepted_at,
+    progress_pct: progress,
+    eta_seconds: etaSeconds,
+    cancel_reason: job.cancel_reason,
+    error: job.status === 'failed' || job.status === 'cancelled' ? job.message : undefined,
+  };
+}
+
+function estimateEtaSeconds(progressPct: number | undefined, startedAt: string | undefined): number | undefined {
+  if (!startedAt || typeof progressPct !== 'number') return undefined;
+  if (!Number.isFinite(progressPct) || progressPct <= 0 || progressPct >= 100) return undefined;
+  const elapsedSeconds = Math.max(0, (Date.now() - new Date(startedAt).getTime()) / 1000);
+  if (elapsedSeconds <= 0.25) return undefined;
+  const totalSeconds = elapsedSeconds / (progressPct / 100);
+  const remainingSeconds = Math.max(0, Math.round(totalSeconds - elapsedSeconds));
+  return Number.isFinite(remainingSeconds) ? remainingSeconds : undefined;
+}
+
+export const useRunsStore = create<RunsState>((set, get) => {
+  const upsertRun = (nextRun: Run): void => {
+    set((state) => ({
+      runs: [nextRun, ...state.runs.filter((existing) => existing.params.case_id !== nextRun.params.case_id)],
+      selectedRunId: nextRun.id,
       error: null,
     }));
+  };
 
-    try {
-      const completed = await api.startRun(params);
-      set((s) => ({
-        runs: [completed, ...s.runs.filter((r) => r.id !== runId)],
-        selectedRunId: completed.id,
-      }));
-      return completed.id;
-    } catch (e) {
-      const failed: Run = {
-        ...pending,
-        status: 'failed',
-        current_stage: undefined,
-        completed_at: new Date().toISOString(),
-        duration_ms: Date.now() - new Date(pending.started_at).getTime(),
-        error: (e as Error).message,
+  const pollJobOnce = async (jobId: string): Promise<void> => {
+    const job = await api.fetchJobStatus(jobId);
+    const run = toRunFromJob(job);
+    upsertRun(run);
+    if (['success', 'failed', 'cancelled'].includes(job.status)) {
+      stopJobPoller(jobId);
+      stopJobStream(jobId);
+      if (job.status === 'success') {
+        await get().fetchRuns();
+      }
+    }
+  };
+
+  const ensureJobPolling = (jobId: string, intervalMs = JOB_POLL_INTERVAL_MS): void => {
+    stopJobPoller(jobId);
+    void pollJobOnce(jobId).catch(() => {
+      stopJobPoller(jobId);
+    });
+    const timer = setInterval(() => {
+      void pollJobOnce(jobId).catch(() => {
+        stopJobPoller(jobId);
+      });
+    }, intervalMs);
+    activeJobPollers.set(jobId, timer);
+  };
+
+  const ensureJobStreaming = (jobId: string): void => {
+    stopJobStream(jobId);
+    const unsubscribe = get().subscribeRunProgress(jobId);
+    activeJobStreams.set(jobId, unsubscribe);
+  };
+
+  return {
+    runs: [],
+    selectedRunId: null,
+    loading: false,
+    error: null,
+
+    fetchRuns: async () => {
+      set({ loading: true, error: null });
+      try {
+        const fetchedRuns = await api.fetchRuns();
+        set((state) => {
+          const inFlight = state.runs.filter((run) => run.status === 'pending' || run.status === 'running');
+          const merged = [...fetchedRuns];
+          for (const run of inFlight) {
+            if (!merged.some((existing) => existing.params.case_id === run.params.case_id)) {
+              merged.unshift(run);
+            }
+          }
+          return { runs: merged, loading: false };
+        });
+      } catch (e) {
+        set({ error: (e as Error).message, loading: false });
+      }
+    },
+
+    selectRun: (id) => set({ selectedRunId: id }),
+
+    submitRun: async (params: RunParams) => {
+      const caseId = params.case_id;
+      const queuedAt = new Date().toISOString();
+      upsertRun({
+        id: caseId,
+        params,
+        status: 'pending',
+        started_at: queuedAt,
+        queued_at: queuedAt,
+        progress_pct: 0,
+      });
+
+      try {
+        const accepted = await api.submitRun(params);
+        upsertRun({
+          id: caseId,
+          params,
+          status: 'pending',
+          started_at: accepted.accepted_at,
+          queued_at: accepted.accepted_at,
+          progress_pct: 0,
+          job_id: accepted.job_id,
+        });
+        if (typeof EventSource === 'undefined') {
+          ensureJobPolling(accepted.job_id, JOB_POLL_INTERVAL_MS);
+        } else {
+          ensureJobStreaming(accepted.job_id);
+          ensureJobPolling(accepted.job_id, JOB_STREAM_FALLBACK_POLL_INTERVAL_MS);
+        }
+        return caseId;
+      } catch (e) {
+        upsertRun({
+          id: caseId,
+          params,
+          status: 'failed',
+          started_at: queuedAt,
+          completed_at: new Date().toISOString(),
+          duration_ms: Date.now() - new Date(queuedAt).getTime(),
+          error: (e as Error).message,
+        });
+        throw e;
+      }
+    },
+
+    fetchJobStatus: async (jobId: string) => {
+      try {
+        const job = await api.fetchJobStatus(jobId);
+        upsertRun(toRunFromJob(job));
+      } catch (e) {
+        set({ error: (e as Error).message });
+      }
+    },
+
+    subscribeRunProgress: (jobId: string) => {
+      return api.subscribeRunProgress(
+        jobId,
+        (event) => {
+          set((state) => {
+            const existing = state.runs.find((run) => run.job_id === event.job_id);
+            if (!existing) return {};
+            const status = mapJobStatusToRunStatus(event.status);
+            const isTerminal = event.event === 'terminal';
+            const etaSeconds = estimateEtaSeconds(event.progress_pct, existing.started_at);
+            const nextRun: Run = {
+              ...existing,
+              status,
+              progress_pct: event.progress_pct,
+              eta_seconds: etaSeconds,
+              cancel_reason: event.cancel_reason,
+              ...(isTerminal ? { completed_at: event.ts } : {}),
+              ...(status === 'failed' || status === 'cancelled' ? { error: event.message ?? existing.error } : {}),
+            };
+            return {
+              runs: [nextRun, ...state.runs.filter((run) => run.id !== nextRun.id)],
+            };
+          });
+          if (event.event === 'terminal') {
+            stopJobPoller(event.job_id);
+            stopJobStream(event.job_id);
+            if (event.status === 'success') {
+              void get().fetchRuns();
+            }
+          }
+        },
+        () => {
+          ensureJobPolling(jobId, JOB_POLL_INTERVAL_MS);
+        },
+      );
+    },
+
+    startRun: async (params: RunParams) => {
+      const runId = params.case_id;
+      const pending: Run = {
+        id: runId,
+        params,
+        status: 'running',
+        started_at: new Date().toISOString(),
+        alert_count: 0,
       };
-      set((s) => ({
-        runs: [failed, ...s.runs.filter((r) => r.id !== runId)],
-        selectedRunId: failed.id,
-      }));
-      throw e;
-    }
-  },
+      upsertRun(pending);
 
-  cancelRun: async (caseId: string) => {
-    try {
-      await api.cancelRun(caseId);
-      set((s) => ({
-        runs: s.runs.map((run) => {
-          if (run.params.case_id !== caseId) return run;
-          return {
-            ...run,
-            status: run.status === 'running' ? 'failed' : run.status,
-            current_stage: undefined,
-            error: run.error ?? `Run ${caseId} cancelled by user`,
-            completed_at: run.completed_at ?? new Date().toISOString(),
-          };
-        }),
-      }));
-    } finally {
-      await get().fetchRuns();
-    }
-  },
-}));
+      try {
+        const completed = await api.startRun(params);
+        upsertRun(completed);
+        return completed.id;
+      } catch (e) {
+        upsertRun({
+          ...pending,
+          status: 'failed',
+          current_stage: undefined,
+          completed_at: new Date().toISOString(),
+          duration_ms: Date.now() - new Date(pending.started_at).getTime(),
+          error: (e as Error).message,
+        });
+        throw e;
+      }
+    },
+
+    cancelRun: async (caseId: string) => {
+      try {
+        const run = get().runs.find((entry) => entry.params.case_id === caseId);
+        if (run?.job_id) {
+          await api.cancelJob(run.job_id);
+          stopJobStream(run.job_id);
+          stopJobPoller(run.job_id);
+        } else {
+          await api.cancelRun(caseId);
+        }
+        set((state) => ({
+          runs: state.runs.map((entry) => {
+            if (entry.params.case_id !== caseId) return entry;
+            return {
+              ...entry,
+              status: entry.status === 'running' || entry.status === 'pending' ? 'cancelled' : entry.status,
+              current_stage: undefined,
+              cancel_reason: entry.cancel_reason ?? 'user',
+              error: entry.error ?? `Run ${caseId} cancelled by user`,
+              completed_at: entry.completed_at ?? new Date().toISOString(),
+            };
+          }),
+        }));
+      } finally {
+        await get().fetchRuns();
+      }
+    },
+  };
+});
 
 /* ═══════════════════════════════════════════
    Case Store
@@ -290,7 +485,7 @@ function getAudioContext(): AudioContext | null {
   return sharedAudioCtx;
 }
 
-export interface Toast {
+interface Toast {
   id: string;
   type: 'success' | 'error' | 'info';
   message: string;
@@ -355,13 +550,13 @@ export const useToastStore = create<ToastState>((set) => ({
 /* ═══════════════════════════════════════════
    Alert Annotations Store (notes, FP, escalation)
    ═══════════════════════════════════════════ */
-export interface AlertNote {
+interface AlertNote {
   id: string;
   text: string;
   created_at: string;
 }
 
-export interface AlertAnnotation {
+interface AlertAnnotation {
   false_positive: boolean;
   escalated: boolean;
   pinned: boolean;

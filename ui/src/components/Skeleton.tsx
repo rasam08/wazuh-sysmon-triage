@@ -11,7 +11,7 @@ interface SkeletonProps {
 /**
  * A single shimmering placeholder rectangle.
  */
-export function Skeleton({ className = '', width, height }: SkeletonProps) {
+function Skeleton({ className = '', width, height }: SkeletonProps) {
   return (
     <div
       className={`skeleton ${className}`}
@@ -24,7 +24,7 @@ export function Skeleton({ className = '', width, height }: SkeletonProps) {
 /**
  * A one-line text skeleton (defaults to full width, 0.875rem height).
  */
-export function SkeletonText({ width = '100%', className = '' }: { width?: string | number; className?: string }) {
+function SkeletonText({ width = '100%', className = '' }: { width?: string | number; className?: string }) {
   return <Skeleton className={`h-3.5 ${className}`} width={width} />;
 }
 

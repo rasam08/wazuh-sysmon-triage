@@ -9,7 +9,7 @@ function toDate(input: string): Date | null {
   return date;
 }
 
-export function relativeFromNow(input: string): string {
+function relativeFromNow(input: string): string {
   const date = toDate(input);
   if (!date) return '-';
 

@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   useReactTable,
   getCoreRowModel,
@@ -25,6 +25,9 @@ const QUEUE_OPTIONS: AlertQueue[] = ['soc_malware', 'soc_policy', 'soc_dev', 'so
 const CATEGORY_OPTIONS: AlertCategory[] = ['malware_execution', 'c2_outbound', 'persistence', 'policy_violation', 'developer_tooling'];
 const CONFIDENCE_OPTIONS: Confidence[] = ['high', 'medium', 'low'];
 const TABS = ['overview', 'explain', 'process', 'network', 'related', 'rule'] as const;
+const VIRTUAL_ROW_HEIGHT_PX = 34;
+const VIRTUAL_OVERSCAN_ROWS = 12;
+const VIRTUALIZATION_MIN_ROWS = 150;
 
 function buildPivotQuery(alert: Alert, caseId?: string | null) {
   const time = new Date(alert.utc_time).getTime();
@@ -61,6 +64,9 @@ function isTypingTarget(target: EventTarget | null): boolean {
 }
 
 export default function AlertWorkbenchScreen() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { alertId: encodedRouteAlertId } = useParams<{ alertId?: string }>();
   const [searchParams] = useSearchParams();
   const {
     alerts,
@@ -90,7 +96,28 @@ export default function AlertWorkbenchScreen() {
   const [shortcutModalOpen, setShortcutModalOpen] = useState(false);
   const [sorting, setSorting] = useState<SortingState>([]);
   const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: alertsPageSize });
+  const tableScrollRef = useRef<HTMLDivElement | null>(null);
+  const [tableScrollTop, setTableScrollTop] = useState(0);
+  const [tableViewportHeight, setTableViewportHeight] = useState(520);
   const queryKey = searchParams.toString();
+  const routeAlertId = useMemo(() => {
+    if (!encodedRouteAlertId) return null;
+    try {
+      return decodeURIComponent(encodedRouteAlertId);
+    } catch {
+      return encodedRouteAlertId;
+    }
+  }, [encodedRouteAlertId]);
+  const alertsListPath = useMemo(
+    () => (queryKey ? `/alerts?${queryKey}` : '/alerts'),
+    [queryKey],
+  );
+  const routePathForAlert = useCallback((alertId: string) => (
+    queryKey
+      ? `/alerts/${encodeURIComponent(alertId)}?${queryKey}`
+      : `/alerts/${encodeURIComponent(alertId)}`
+  ), [queryKey]);
+  const missingRouteAlertRef = useRef<string | null>(null);
 
   useEffect(() => {
     const params = new URLSearchParams(queryKey);
@@ -152,6 +179,11 @@ export default function AlertWorkbenchScreen() {
   );
 
   const openAlert = useCallback(async (id: string) => {
+    const nextPath = routePathForAlert(id);
+    const currentPath = `${location.pathname}${location.search}`;
+    if (currentPath !== nextPath) {
+      navigate(nextPath, { replace: true });
+    }
     selectAlert(id);
     setDrawerOpen(true);
     setActiveTab('overview');
@@ -171,7 +203,41 @@ export default function AlertWorkbenchScreen() {
     } finally {
       setBundleLoading(false);
     }
-  }, [activeCaseId, queryKey, selectAlert, addToast]);
+  }, [activeCaseId, queryKey, selectAlert, addToast, routePathForAlert, location.pathname, location.search, navigate]);
+
+  useEffect(() => {
+    if (!routeAlertId) {
+      missingRouteAlertRef.current = null;
+      return;
+    }
+    if (loading) return;
+
+    const inCurrentAlertSet = alerts.some((alert) => alert.alert_id === routeAlertId);
+    if (inCurrentAlertSet) {
+      missingRouteAlertRef.current = null;
+      if (selectedAlertId !== routeAlertId || !drawerOpen) {
+        void openAlert(routeAlertId);
+      }
+      return;
+    }
+
+    if (alerts.length === 0) return;
+    if (missingRouteAlertRef.current === routeAlertId) return;
+
+    missingRouteAlertRef.current = routeAlertId;
+    addToast('error', `Alert ${routeAlertId} not found in current case`);
+    navigate(alertsListPath, { replace: true });
+  }, [
+    routeAlertId,
+    loading,
+    alerts,
+    selectedAlertId,
+    drawerOpen,
+    openAlert,
+    addToast,
+    navigate,
+    alertsListPath,
+  ]);
 
   const navigateSelection = useCallback((delta: 1 | -1) => {
     if (processed.length === 0) return;
@@ -329,6 +395,49 @@ export default function AlertWorkbenchScreen() {
     getSortedRowModel: getSortedRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
   });
+  const tableRows = table.getRowModel().rows;
+  const shouldVirtualize = tableRows.length >= VIRTUALIZATION_MIN_ROWS;
+  const virtualStartIndex = shouldVirtualize
+    ? Math.max(0, Math.floor(tableScrollTop / VIRTUAL_ROW_HEIGHT_PX) - VIRTUAL_OVERSCAN_ROWS)
+    : 0;
+  const virtualVisibleCount = shouldVirtualize
+    ? Math.ceil(tableViewportHeight / VIRTUAL_ROW_HEIGHT_PX) + (2 * VIRTUAL_OVERSCAN_ROWS)
+    : tableRows.length;
+  const virtualEndIndex = shouldVirtualize
+    ? Math.min(tableRows.length, virtualStartIndex + virtualVisibleCount)
+    : tableRows.length;
+  const visibleRows = shouldVirtualize
+    ? tableRows.slice(virtualStartIndex, virtualEndIndex)
+    : tableRows;
+  const topSpacerPx = shouldVirtualize ? virtualStartIndex * VIRTUAL_ROW_HEIGHT_PX : 0;
+  const bottomSpacerPx = shouldVirtualize
+    ? Math.max(0, (tableRows.length - virtualEndIndex) * VIRTUAL_ROW_HEIGHT_PX)
+    : 0;
+
+  useEffect(() => {
+    const container = tableScrollRef.current;
+    if (!container) return;
+    const refresh = () => {
+      setTableViewportHeight(Math.max(160, container.clientHeight));
+    };
+    refresh();
+    window.addEventListener('resize', refresh);
+    return () => window.removeEventListener('resize', refresh);
+  }, []);
+
+  useEffect(() => {
+    if (!selectedAlertId || !shouldVirtualize) return;
+    const row = document.querySelector(`[data-alert-row="${selectedAlertId}"]`);
+    if (row && typeof row.scrollIntoView === 'function') return;
+    const container = tableScrollRef.current;
+    if (!container) return;
+    const rowIndex = tableRows.findIndex((entry) => entry.original.alert_id === selectedAlertId);
+    if (rowIndex < 0) return;
+    container.scrollTo({
+      top: rowIndex * VIRTUAL_ROW_HEIGHT_PX,
+      behavior: 'smooth',
+    });
+  }, [selectedAlertId, shouldVirtualize, tableRows]);
 
   if (loading && !alerts.length) return <LoadingSpinner label="Loading alerts..." />;
 
@@ -364,7 +473,11 @@ export default function AlertWorkbenchScreen() {
       {processed.length === 0 ? (
         <EmptyState title="No alerts match filters" description="Try adjusting your filter criteria" action={<Button variant="secondary" onClick={resetFilters}>Reset Filters</Button>} />
       ) : (
-        <div className="flex-1 overflow-auto border border-gray-800 rounded-lg">
+        <div
+          ref={tableScrollRef}
+          onScroll={(event) => setTableScrollTop((event.target as HTMLDivElement).scrollTop)}
+          className="flex-1 overflow-auto border border-gray-800 rounded-lg"
+        >
           <table className="w-full table-dense text-left">
             <thead className="bg-gray-900 sticky top-0 z-10">
               {table.getHeaderGroups().map((group) => (
@@ -384,7 +497,12 @@ export default function AlertWorkbenchScreen() {
               ))}
             </thead>
             <tbody>
-              {table.getRowModel().rows.map((row) => (
+              {topSpacerPx > 0 && (
+                <tr aria-hidden="true">
+                  <td colSpan={columns.length} style={{ height: topSpacerPx, padding: 0 }} />
+                </tr>
+              )}
+              {visibleRows.map((row) => (
                 <tr
                   key={row.id}
                   data-alert-row={row.original.alert_id}
@@ -398,6 +516,11 @@ export default function AlertWorkbenchScreen() {
                   ))}
                 </tr>
               ))}
+              {bottomSpacerPx > 0 && (
+                <tr aria-hidden="true">
+                  <td colSpan={columns.length} style={{ height: bottomSpacerPx, padding: 0 }} />
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -415,7 +538,13 @@ export default function AlertWorkbenchScreen() {
 
       <Drawer
         open={drawerOpen}
-        onClose={() => { setDrawerOpen(false); selectAlert(null); }}
+        onClose={() => {
+          setDrawerOpen(false);
+          selectAlert(null);
+          if (routeAlertId) {
+            navigate(alertsListPath, { replace: true });
+          }
+        }}
         title={selectedAlert ? `Alert ${selectedAlert.alert_id}` : 'Alert Details'}
         width="w-[580px]"
       >

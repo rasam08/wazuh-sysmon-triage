@@ -3,6 +3,7 @@ import { Badge, Button, Card, useConfirmModal } from '@/components';
 import { useSettingsStore, useToastStore } from '@/stores';
 import { fetchHealth } from '@/data/api';
 import type { HealthStatus } from '@/types';
+import { ONBOARDING_RESET_EVENT, resetOnboardingTour } from '@/utils/onboarding';
 import type {
   ApiEndpointConfig, AlertThresholds, NotificationPrefs, DisplayOptions,
   ExportConfig, SuppressionRule, RunPreset, ThemeMode, Density, DateFormat, ExportFormat,
@@ -88,6 +89,18 @@ export default function SettingsScreen() {
           <input type="file" ref={fileRef} accept=".json" onChange={handleFileChange} className="hidden" />
           <Button variant="secondary" size="sm" className="w-full" onClick={handleExport}>Export Settings</Button>
           <Button variant="secondary" size="sm" className="w-full" onClick={handleImport}>Import Settings</Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            className="w-full"
+            onClick={() => {
+              resetOnboardingTour();
+              window.dispatchEvent(new Event(ONBOARDING_RESET_EVENT));
+              addToast('info', 'Onboarding tour reset');
+            }}
+          >
+            Reset Onboarding
+          </Button>
           <Button variant="danger" size="sm" className="w-full" onClick={handleReset}>Reset All</Button>
         </div>
       </nav>

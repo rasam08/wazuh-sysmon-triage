@@ -94,7 +94,7 @@ export function exportAlertsCsv(alerts: Alert[], filename?: string, caseId?: str
   downloadText(rows.join('\n'), name, 'text/csv');
 }
 
-export function exportAlertJson(alert: Alert, filename?: string, caseId?: string) {
+function exportAlertJson(alert: Alert, filename?: string, caseId?: string) {
   const name = resolveFilename('alert', 'json', caseId, filename);
   downloadText(stringifyJson(alert), name, 'application/json');
 }
@@ -117,7 +117,7 @@ export function exportAlert(alert: Alert, caseId?: string, filename?: string) {
   exportAlertJson(alert, filename, caseId);
 }
 
-export function exportBundleJson(bundle: AlertBundle, filename?: string, caseId?: string) {
+function exportBundleJson(bundle: AlertBundle, filename?: string, caseId?: string) {
   const cfg = getExportConfig();
   const payload = cfg.include_metadata_in_exports
     ? bundle
@@ -326,7 +326,7 @@ export function exportRunLogs(run: {
   downloadText(stringifyJson(payload), name, 'application/json');
 }
 
-export function exportTimelineCsv(events: TimelineEvent[], filename?: string, caseId?: string) {
+function exportTimelineCsv(events: TimelineEvent[], filename?: string, caseId?: string) {
   const cfg = getExportConfig();
   const delimiter = cfg.csv_delimiter;
   const headers = ['timestamp', 'event_id', 'image', 'command_line', 'parent_image', 'target_filename', 'user', 'rule_id', 'agent_name', 'agent_id'];
@@ -349,7 +349,7 @@ export function exportTimelineCsv(events: TimelineEvent[], filename?: string, ca
   downloadText(rows.join('\n'), name, 'text/csv');
 }
 
-export function exportArtifactsCsv(artifacts: Artifact[], filename?: string, caseId?: string) {
+function exportArtifactsCsv(artifacts: Artifact[], filename?: string, caseId?: string) {
   const cfg = getExportConfig();
   const delimiter = cfg.csv_delimiter;
   const headers = ['path', 'created_at', 'creating_image', 'confidence', 'tags'];

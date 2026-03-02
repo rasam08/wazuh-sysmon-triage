@@ -5,6 +5,14 @@ import { Button, Card, StatusBadge, EmptyState, LoadingSpinner, ErrorPanel, Skel
 import { exportRunLogs, copyToClipboard } from '@/utils/exports';
 import { formatDateTime } from '@/utils/datetime';
 
+function formatEta(etaSeconds: number | undefined): string {
+  if (typeof etaSeconds !== 'number' || !Number.isFinite(etaSeconds) || etaSeconds <= 0) return '-';
+  if (etaSeconds < 60) return `${etaSeconds}s ETA`;
+  const minutes = Math.floor(etaSeconds / 60);
+  const seconds = etaSeconds % 60;
+  return `${minutes}m ${seconds}s ETA`;
+}
+
 export default function RunsDashboardScreen() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -80,6 +88,7 @@ export default function RunsDashboardScreen() {
               <option value="success">Success</option>
               <option value="running">Running</option>
               <option value="failed">Failed</option>
+              <option value="cancelled">Cancelled</option>
               <option value="pending">Pending</option>
             </select>
             <select
@@ -111,6 +120,8 @@ export default function RunsDashboardScreen() {
                 <span>{run.params.mode}</span>
                 <span>{run.alert_count ?? 0} alerts</span>
                 <span>{run.duration_ms ? `${(run.duration_ms / 1000).toFixed(1)}s` : '-'}</span>
+                <span>{typeof run.progress_pct === 'number' ? `${run.progress_pct}%` : '-'}</span>
+                <span>{formatEta(run.eta_seconds)}</span>
               </div>
             </button>
           ))}
@@ -180,7 +191,7 @@ export default function RunsDashboardScreen() {
             )}
 
             <div className="flex flex-wrap gap-2">
-              {selectedRun.status === 'running' && (
+              {(selectedRun.status === 'running' || selectedRun.status === 'pending') && (
                 <Button
                   size="sm"
                   variant="danger"
@@ -259,6 +270,7 @@ export default function RunsDashboardScreen() {
                 <MetaRow label="Time" value={selectedRun.params.time_preset} />
                 <MetaRow label="Started" value={formatDateTime(selectedRun.started_at, dateFormat)} mono />
                 <MetaRow label="Duration" value={selectedRun.duration_ms ? `${(selectedRun.duration_ms / 1000).toFixed(1)}s` : '-'} />
+                <MetaRow label="ETA" value={formatEta(selectedRun.eta_seconds)} />
                 <MetaRow label="Min Score" value={String(selectedRun.params.min_alert_score)} />
                 <MetaRow label="Queues" value={selectedRun.params.queues.join(', ')} mono={monospaceCommands} />
               </dl>
