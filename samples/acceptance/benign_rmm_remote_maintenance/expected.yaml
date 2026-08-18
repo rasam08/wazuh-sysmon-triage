@@ -1,0 +1,22 @@
+schema_version: 1
+scenario: benign_rmm_remote_maintenance
+provenance: synthetic
+required_findings:
+- type: remote_logon_followed_by_service_install
+  finding_kind: hypothesis
+  evidence_strength: strong
+forbidden_findings:
+- malicious_lateral_movement
+- malicious_verdict
+- remote_logon_followed_by_scheduled_task
+expected_unknowns:
+- authorization and maintenance-ticket context are not present
+minimum_process_edges: 0
+minimum_unresolved_relationships: 0
+expected_counts:
+  input_records: 3
+  selected_records: 3
+  omitted_records: 0
+  input_rejected: 0
+  normalize_dropped: 0
+  unsupported: 0

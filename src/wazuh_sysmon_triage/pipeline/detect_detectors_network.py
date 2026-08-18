@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 
 from wazuh_sysmon_triage.models.alerts import Alert
+from wazuh_sysmon_triage.models.findings import EvidenceStrength
 from wazuh_sysmon_triage.models.sysmon import NetworkConnectEvent, ProcessCreateEvent
 
 from .detect_contexts import _find_process_create
@@ -12,14 +13,12 @@ from .detect_types import (
     BEACON_MAX_JITTER_RATIO,
     BEACON_MIN_AVG_SECONDS,
     BEACON_MIN_CONNECTIONS,
-    RULE_METADATA,
     DetectionContexts,
 )
 from .detect_utils import (
     _basename,
-    _is_microsoft_destination,
+    _hits_to_reason,
     _is_public_ip,
-    _score_to_reason,
     is_allowlisted_image,
 )
 
@@ -28,49 +27,32 @@ def _detect_lolbin_outbound(
     event: NetworkConnectEvent,
     process_create: ProcessCreateEvent | None,
 ) -> Alert | None:
-    from .detect_types import LOLBIN_BASENAMES  # local to keep module imports acyclic
+    from .detect_types import LOLBIN_BASENAMES
 
     if _basename(event.image) not in LOLBIN_BASENAMES:
         return None
 
-    score = 60
-    hits = ["LOLBin outbound network connection"]
-
+    hits = ["LOLBin image made a network connection"]
     if _is_public_ip(event.destination_ip):
-        score += 20
         hits.append("public destination")
     if event.destination_port in {80, 443}:
-        score += 10
-        hits.append("web port")
+        hits.append("HTTP(S) destination port")
 
-    return Alert(
-        utc_time=event.timestamp,
-        score=min(score, 100),
-        rule_id=RULE_METADATA["lolbin_outbound"]["rule_id"],
-        rule_name=RULE_METADATA["lolbin_outbound"]["rule_name"],
-        primary_event_id=RULE_METADATA["lolbin_outbound"]["primary_event_id"],
+    return _base_alert(
+        event=event,
         alert_type="lolbin_outbound",
-        category="c2_outbound",
-        queue="soc_malware",
-        confidence="high" if _is_public_ip(event.destination_ip) else "medium",
-        reason=_score_to_reason("LOLBin outbound traffic", hits),
-        image=event.image,
+        reason=_hits_to_reason("LOLBin network activity observed", hits),
+        category="network_behavior",
+        tags=["lolbin", "network"],
         command_line=process_create.command_line if process_create else None,
         parent_image=process_create.parent_image if process_create else None,
         destination_ip=event.destination_ip,
         destination_port=event.destination_port,
-        process_guid=event.process_guid,
-        tags=[
-            "batcave",
-            "lolbin",
-            "network",
-            "dest:public" if _is_public_ip(event.destination_ip) else "dest:private",
-            "dest:microsoft_asn" if _is_microsoft_destination(event.destination_ip) else "dest:non_microsoft",
-        ],
+        evidence_events=[process_create] if process_create else [],
     )
 
 
-def _detect_suspicious_path_outbound(
+def _detect_user_writable_path_outbound(
     event: NetworkConnectEvent,
     process_create: ProcessCreateEvent | None,
 ) -> Alert | None:
@@ -81,66 +63,47 @@ def _detect_suspicious_path_outbound(
     ):
         return None
 
-    score = 50
-    hits = ["process launched from suspicious path"]
-
+    hits = ["image path is in a user-writable location"]
     if _is_public_ip(event.destination_ip):
-        score += 20
         hits.append("public destination")
     if event.destination_port in {80, 443}:
-        score += 10
-        hits.append("web port")
+        hits.append("HTTP(S) destination port")
 
-    return Alert(
-        utc_time=event.timestamp,
-        score=min(score, 100),
-        rule_id=RULE_METADATA["suspicious_path_outbound"]["rule_id"],
-        rule_name=RULE_METADATA["suspicious_path_outbound"]["rule_name"],
-        primary_event_id=RULE_METADATA["suspicious_path_outbound"]["primary_event_id"],
-        alert_type="suspicious_path_outbound",
-        category="policy_violation",
-        queue="soc_policy",
-        confidence="medium",
-        reason=_score_to_reason("Suspicious-path outbound traffic", hits),
-        image=event.image,
+    return _base_alert(
+        event=event,
+        alert_type="user_writable_path_outbound",
+        reason=_hits_to_reason("User-writable-path network activity observed", hits),
+        category="network_behavior",
+        tags=["user-writable-path", "network"],
         command_line=process_create.command_line if process_create else None,
         parent_image=process_create.parent_image if process_create else None,
         destination_ip=event.destination_ip,
         destination_port=event.destination_port,
-        process_guid=event.process_guid,
-        tags=[
-            "batcave",
-            "suspicious-path",
-            "network",
-            "dest:public" if _is_public_ip(event.destination_ip) else "dest:private",
-            "dest:microsoft_asn" if _is_microsoft_destination(event.destination_ip) else "dest:non_microsoft",
-        ],
+        evidence_events=[process_create] if process_create else [],
     )
 
 
-def _detect_beacon_like_outbound(contexts: DetectionContexts) -> list[Alert]:
-    grouped: defaultdict[tuple[str, str, int], list[NetworkConnectEvent]] = defaultdict(list)
-    for guid, rows in contexts.network_by_guid.items():
+def _detect_periodic_outbound(contexts: DetectionContexts) -> list[Alert]:
+    grouped: defaultdict[tuple[str, str, str, int], list[NetworkConnectEvent]] = defaultdict(list)
+    for (host_key, guid), rows in contexts.network_by_process.items():
         for event in rows:
             if not _is_public_ip(event.destination_ip):
                 continue
-            if _is_microsoft_destination(event.destination_ip):
-                continue
             if is_allowlisted_image(event.image):
                 continue
-            grouped[(guid, event.destination_ip, event.destination_port)].append(event)
+            grouped[(host_key, guid, event.destination_ip, event.destination_port)].append(event)
 
     alerts: list[Alert] = []
-    for (guid, destination_ip, destination_port), rows in grouped.items():
+    for (host_key, guid, destination_ip, destination_port), rows in grouped.items():
         if len(rows) < BEACON_MIN_CONNECTIONS:
             continue
 
         rows = sorted(rows, key=lambda item: item.timestamp)
-        intervals: list[float] = []
-        for idx in range(1, len(rows)):
-            delta = (rows[idx].timestamp - rows[idx - 1].timestamp).total_seconds()
-            if delta > 0:
-                intervals.append(delta)
+        intervals = [
+            (rows[idx].timestamp - rows[idx - 1].timestamp).total_seconds()
+            for idx in range(1, len(rows))
+            if (rows[idx].timestamp - rows[idx - 1].timestamp).total_seconds() > 0
+        ]
         if len(intervals) < BEACON_MIN_CONNECTIONS - 1:
             continue
 
@@ -153,42 +116,34 @@ def _detect_beacon_like_outbound(contexts: DetectionContexts) -> list[Alert]:
             continue
 
         anchor = rows[-1]
-        process_create = _find_process_create(contexts.process_creates, guid, anchor.timestamp)
-        score = 65
-        score += 15
-        if len(rows) >= 5:
-            score += 10
-        if jitter_ratio <= 0.15:
-            score += 5
-
+        process_create = _find_process_create(
+            contexts.process_creates,
+            host_key,
+            guid,
+            anchor.timestamp,
+        )
         reason = (
-            "Beacon-like outbound pattern: "
+            "Periodic outbound timing pattern observed: "
             f"{len(rows)} connections to {destination_ip}:{destination_port} "
-            f"every ~{avg_interval:.0f}s (jitter {jitter_ratio * 100:.0f}%)"
+            f"every ~{avg_interval:.0f}s (observed jitter {jitter_ratio * 100:.0f}%). "
+            "Periodic timing alone does not establish beaconing."
         )
 
         alerts.append(
             _base_alert(
                 event=anchor,
-                alert_type="beacon_like_outbound",
-                score=min(score, 100),
+                alert_type="periodic_outbound_pattern",
                 reason=reason,
-                category="c2_outbound",
-                queue="soc_malware",
-                confidence="high" if len(rows) >= 4 else "medium",
-                tags=[
-                    "batcave",
-                    "beacon",
-                    "network",
-                    "dest:public",
-                    "dest:non_microsoft",
-                ],
+                category="aggregate_behavior",
+                finding_kind="hypothesis",
+                evidence_strength=EvidenceStrength.CIRCUMSTANTIAL,
+                tags=["periodic-network", "requires-context"],
                 command_line=process_create.command_line if process_create else None,
                 parent_image=process_create.parent_image if process_create else None,
                 destination_ip=destination_ip,
                 destination_port=destination_port,
+                evidence_events=[*rows, *([process_create] if process_create else [])],
             )
         )
 
     return alerts
-

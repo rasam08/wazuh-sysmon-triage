@@ -8,36 +8,27 @@ from typing import Any
 import typer
 
 from wazuh_sysmon_triage.models.raw import RawHit
+from wazuh_sysmon_triage.pipeline.fetch import DEFAULT_EVENT_IDS
 
 DEFAULT_PROFILE_PRESETS: dict[str, dict[str, Any]] = {
     "soc": {
-        "event_ids": [1, 3, 11],
-        "min_alert_score": 70,
+        "event_ids": list(DEFAULT_EVENT_IDS),
         "alerts_only": True,
         "print_stats": True,
         "agent_name": "anon",
-        "destination_scoring_mode": "balanced",
-        "alert_queues": ["soc_malware", "soc_policy"],
-        "include_dev_queue": False,
     },
     "lab": {
-        "event_ids": [1, 3, 11],
-        "min_alert_score": 60,
+        "event_ids": list(DEFAULT_EVENT_IDS),
         "alerts_only": True,
         "print_stats": True,
-        "destination_scoring_mode": "lab",
         "verify_tls": False,
     },
     "dev": {
-        "event_ids": [1, 3, 11],
-        "min_alert_score": 70,
+        "event_ids": list(DEFAULT_EVENT_IDS),
         "alerts_only": False,
         "print_stats": True,
-        "destination_scoring_mode": "balanced",
     },
 }
-
-VALID_ALERT_QUEUES = {"soc_malware", "soc_policy", "soc_dev", "soc_info"}
 LAST_RE = re.compile(r"^(\d+)([mhd])$", flags=re.IGNORECASE)
 
 
@@ -70,14 +61,14 @@ def _generate_case_id(now: datetime | None = None) -> str:
     return f"incident-{ts}"
 
 
-def _parse_last_duration(value: str) -> timedelta:
+def _parse_last_duration(value: str, *, option_name: str = "--last") -> timedelta:
     match = LAST_RE.match(value.strip())
     if not match:
-        raise typer.BadParameter("--last must look like 15m, 2h, or 7d")
+        raise typer.BadParameter(f"{option_name} must look like 15m, 2h, or 7d")
     amount = int(match.group(1))
     unit = match.group(2).lower()
     if amount <= 0:
-        raise typer.BadParameter("--last value must be greater than zero")
+        raise typer.BadParameter(f"{option_name} value must be greater than zero")
     if unit == "m":
         return timedelta(minutes=amount)
     if unit == "h":
@@ -196,34 +187,3 @@ def _alert_contributors(alert: Any) -> list[str]:
     if "role:developer" in tags:
         contributors.append("context:developer")
     return contributors
-
-
-def _normalize_alert_queues(value: list[str] | None) -> list[str] | None:
-    if not value:
-        return None
-    normalized: list[str] = []
-    for queue in value:
-        item = str(queue).strip().lower()
-        if item not in VALID_ALERT_QUEUES:
-            raise typer.BadParameter(
-                f"Invalid queue '{queue}'. Use one of: {', '.join(sorted(VALID_ALERT_QUEUES))}"
-            )
-        if item not in normalized:
-            normalized.append(item)
-    return normalized
-
-
-def _filter_alerts_by_queue(
-    alerts: list[Any],
-    *,
-    alert_queues: list[str] | None,
-    include_dev_queue: bool,
-) -> list[Any]:
-    queues = _normalize_alert_queues(alert_queues)
-    if queues is None:
-        return alerts
-    effective = set(queues)
-    if include_dev_queue:
-        effective.add("soc_dev")
-    return [alert for alert in alerts if getattr(alert, "queue", "") in effective]
-

@@ -1,5 +1,50 @@
 # Changelog
 
+## v2.0.0 - 2026-08-18
+
+This is a major, evidence-first rework of the original February 2026 release. It keeps the
+project's existing history while replacing the earlier score-driven and UI-assisted design
+with a focused, deterministic investigation CLI.
+
+- Added schema 2.4 per-record NDJSON isolation for malformed JSON, invalid UTF-8,
+  non-object values, and oversized records, with streamed quarantine metadata and strict mode.
+- Added nine manifest-driven professional acceptance scenarios covering benign activity,
+  incident chains, degraded telemetry, remote administration, and deterministic endpoint noise.
+- Added measured 10k/50k/100k runtime and memory gates, nonlinear-growth checks, and a
+  one-million-line bounded-source safety qualification.
+- Added P3 provider-scoped Windows Security evidence for successful remote logons
+  (4624 types 3/10), service installation (4697), and scheduled-task creation (4698).
+- Added bounded same-host logon-session correlation, exact source-host resolution, and
+  explicitly non-verdict remote-activity leads with a realistic multi-host fixture.
+- Added dedicated authentication/service/task case evidence, host-level pivot bundles,
+  remote-source finding fields, and additive output schema `2.3.0`.
+- Added P2 saved-case `case` and `process` commands with JSON output, explicit noise
+  accounting, collection caveats, unresolved relationships, and evidence-backed pivots.
+- Added exact cross-host observable scoping leads without asserting lateral movement.
+- Added separate alert and archive context index selection for `triage alert`.
+- Added canonical Sysmon process termination (5) and file deletion (23/26) evidence,
+  a realistic lifecycle fixture, and additive output schema `2.2.0`.
+- Added the P1 `triage alert` workflow for exact Wazuh-trigger lookup and bounded,
+  host-specific context collection with fail-closed truncation behavior.
+- Added canonical Sysmon registry (12–14), process access (10), and DNS (22)
+  parsing, correlation, reporting, pivots, and evidence-backed endpoint findings.
+- Added a realistic endpoint-chain fixture and bumped the additive output schema to `2.1.0`.
+- Completed the P0 integrity pass: host-scoped process correlation, explicit PID fallback,
+  preserved source provenance, native Wazuh metadata, and transparent retrieval failures.
+- Replaced arbitrary risk scores, confidence labels, queue routing, and destination verdicts
+  with evidence-backed behavior findings that distinguish observations from hypotheses.
+- Bumped the output schema to `2.0.0`; legacy score and queue settings are now rejected.
+- Removed the React UI, Node middleware/API, browser tests, and UI-specific operational files.
+- Converted Docker, CI, release automation, developer setup, and documentation to a Python CLI-only workflow.
+- Updated Typer to a Python 3.12-compatible release so the packaged `triage` entrypoint starts correctly.
+
+### Breaking changes
+
+- Removed the experimental React UI and its Node API; v2 is a Python CLI-only tool.
+- Removed arbitrary risk scores, confidence labels, queue routing, and destination verdicts.
+- Rejects legacy score and queue configuration instead of silently changing its meaning.
+- Bumped the output schema to `2.4.0`; consumers must validate the declared schema version.
+
 ## v1.0.0
 
 - End-to-end Sysmon triage pipeline (fetch → normalize → correlate → render)

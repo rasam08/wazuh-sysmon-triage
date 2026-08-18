@@ -11,6 +11,7 @@ from wazuh_sysmon_triage.models.alerts import Alert
 from wazuh_sysmon_triage.models.sysmon import SysmonEvent
 from wazuh_sysmon_triage.output_schema import OUTPUT_SCHEMA_VERSION
 from wazuh_sysmon_triage.pipeline.detect import DetectionRunResult
+from wazuh_sysmon_triage.pipeline.ndjson import InputQualityReport
 from wazuh_sysmon_triage.pipeline.normalize import NormalizeReport
 from wazuh_sysmon_triage.sanitize import OutputSanitizer
 
@@ -82,23 +83,19 @@ def _print_alert_explanations(
         destination_ip = getattr(alert, "destination_ip", "")
         destination_port = getattr(alert, "destination_port", "")
         reason = getattr(alert, "reason", "")
-        routing_why = getattr(alert, "routing_why", "")
         if sanitizer:
             alert_id = sanitizer.sanitize_text(alert_id) or alert_id
             image = sanitizer.sanitize_text(image) or image
             command_line = sanitizer.sanitize_text(command_line) or command_line
             destination_ip = sanitizer.sanitize_ip(destination_ip) or destination_ip
             reason = sanitizer.sanitize_text(reason) or reason
-            routing_why = sanitizer.sanitize_text(routing_why) or routing_why
-
-        typer.echo(f"[explain] {alert_id} score={alert.score} type={alert.alert_type}")
+        typer.echo(f"[explain] {alert_id} type={alert.alert_type}")
         typer.echo(
-            f"  rule={getattr(alert, 'rule_id', '') or 'n/a'} name={getattr(alert, 'rule_name', '') or 'n/a'} category={alert.category} queue={alert.queue} confidence={alert.confidence}"
+            f"  rule={getattr(alert, 'rule_id', '') or 'n/a'} name={getattr(alert, 'rule_name', '') or 'n/a'} category={alert.category} kind={alert.finding_kind} evidence_strength={alert.evidence_strength.value}"
         )
         typer.echo(f"  reason={reason}")
-        if routing_why:
-            typer.echo(f"  routing={routing_why}")
         typer.echo(f"  contributors={', '.join(_alert_contributors(alert))}")
+        typer.echo("  evidence=" + ", ".join(ref.locator for ref in alert.evidence_refs))
         context = f"  image={image}"
         if command_line:
             context += f" command_line={command_line}"
@@ -127,8 +124,6 @@ def _write_stats_json(
     normalized: list[SysmonEvent],
     correlation: dict[str, Any],
     detection_result: DetectionRunResult,
-    configured_alert_queues: list[str] | None,
-    include_dev_queue: bool,
     truncation: TruncationInfo,
     normalize_report: NormalizeReport,
     fetch_duration_ms: int,
@@ -138,10 +133,19 @@ def _write_stats_json(
     render_duration_ms: int,
     total_duration_ms: int,
     sanitizer: OutputSanitizer | None,
+    input_quality: InputQualityReport | None = None,
 ) -> None:
     process_event_count = sum(1 for event in normalized if event.event_id == 1)
+    process_terminate_event_count = sum(1 for event in normalized if event.event_id == 5)
     file_event_count = sum(1 for event in normalized if event.event_id == 11)
+    file_delete_event_count = sum(1 for event in normalized if event.event_id in {23, 26})
     network_event_count = sum(1 for event in normalized if event.event_id == 3)
+    process_access_event_count = sum(1 for event in normalized if event.event_id == 10)
+    registry_event_count = sum(1 for event in normalized if event.event_id in {12, 13, 14})
+    dns_event_count = sum(1 for event in normalized if event.event_id == 22)
+    successful_logon_event_count = sum(1 for event in normalized if event.event_id == 4624)
+    service_install_event_count = sum(1 for event in normalized if event.event_id == 4697)
+    scheduled_task_event_count = sum(1 for event in normalized if event.event_id == 4698)
     events_per_second = (
         round(len(normalized) / (total_duration_ms / 1000), 2) if total_duration_ms > 0 else 0.0
     )
@@ -152,8 +156,16 @@ def _write_stats_json(
         "total_events": len(normalized),
         "events_by_type": {
             "process_create": process_event_count,
+            "process_terminate": process_terminate_event_count,
             "network_connect": network_event_count,
             "file_create": file_event_count,
+            "file_delete": file_delete_event_count,
+            "registry": registry_event_count,
+            "dns_query": dns_event_count,
+            "process_access": process_access_event_count,
+            "successful_logon": successful_logon_event_count,
+            "service_install": service_install_event_count,
+            "scheduled_task_created": scheduled_task_event_count,
         },
         "artifacts": len(correlation.get("artifacts", [])),
         "nodes": len(correlation.get("nodes", [])),
@@ -161,15 +173,13 @@ def _write_stats_json(
         "suppressed_alerts": detection_result.suppressed_alerts,
         "suppressed_events": detection_result.suppressed_events,
         "suppression_hits": detection_result.suppression_hits,
-        "queue_filter": {
-            "alert_queues": configured_alert_queues,
-            "include_dev_queue": include_dev_queue,
-        },
         "truncation": truncation,
         "dropped_count": normalize_report.dropped_count,
         "dropped_by_reason": normalize_report.dropped_by_reason,
         "invalid_timestamp_count": normalize_report.invalid_timestamp_count,
         "invalid_timestamp_by_eid": normalize_report.invalid_timestamp_by_eid,
+        "unsupported_count": normalize_report.unsupported_count,
+        "unsupported_by_eid": normalize_report.unsupported_by_eid,
         "fetch_duration_ms": fetch_duration_ms,
         "normalize_duration_ms": normalize_duration_ms,
         "correlate_duration_ms": correlate_duration_ms,
@@ -178,6 +188,8 @@ def _write_stats_json(
         "total_duration_ms": total_duration_ms,
         "events_per_second": events_per_second,
     }
+    if input_quality is not None:
+        stats_payload["input_quality"] = input_quality.to_payload()
     if sanitizer:
         stats_payload = sanitizer.sanitize_obj(stats_payload)
     with open(os.path.join(out_dir, "stats.json"), "w", encoding="utf-8") as handle:
@@ -200,11 +212,8 @@ def _build_run_metadata_payload(
     alerts_count: int,
     pivot_bundle_count: int,
     detection_result: DetectionRunResult,
-    destination_scoring_mode: str,
     suppression_rules: list[dict[str, Any]],
     allowlist_override_rules: list[dict[str, Any]],
-    configured_alert_queues: list[str] | None,
-    include_dev_queue: bool,
     verify_tls: bool,
     retention_result: dict[str, Any] | None,
     normalize_report: NormalizeReport,
@@ -216,8 +225,18 @@ def _build_run_metadata_payload(
     render_duration_ms: int,
     total_duration_ms: int,
     query_body: dict[str, Any],
+    investigation_anchor: dict[str, Any] | None = None,
+    input_quality: InputQualityReport | None = None,
+    fail_on_input_errors: bool = False,
 ) -> dict[str, Any]:
-    return {
+    stage_durations_ms = {
+        "fetch": fetch_duration_ms,
+        "normalize": normalize_duration_ms,
+        "correlate": correlate_duration_ms,
+        "detect": detect_duration_ms,
+        "render": render_duration_ms,
+    }
+    payload: dict[str, Any] = {
         "version": __version__,
         "run_id": run_id,
         "start": start,
@@ -238,15 +257,10 @@ def _build_run_metadata_payload(
             "suppressed_events": detection_result.suppressed_events,
             "pivot_bundles": pivot_bundle_count,
         },
-        "destination_scoring_mode": destination_scoring_mode,
         "suppression": {
             "rules_count": len(suppression_rules),
             "allowlist_override_count": len(allowlist_override_rules),
             "suppression_hits": detection_result.suppression_hits,
-        },
-        "queue_filter": {
-            "alert_queues": configured_alert_queues,
-            "include_dev_queue": include_dev_queue,
         },
         "verify_tls": verify_tls,
         "retention": retention_result or {},
@@ -254,6 +268,8 @@ def _build_run_metadata_payload(
         "dropped_by_reason": normalize_report.dropped_by_reason,
         "invalid_timestamp_count": normalize_report.invalid_timestamp_count,
         "invalid_timestamp_by_eid": normalize_report.invalid_timestamp_by_eid,
+        "unsupported_count": normalize_report.unsupported_count,
+        "unsupported_by_eid": normalize_report.unsupported_by_eid,
         "truncation": truncation,
         "fetch_duration_ms": fetch_duration_ms,
         "normalize_duration_ms": normalize_duration_ms,
@@ -261,8 +277,15 @@ def _build_run_metadata_payload(
         "detect_duration_ms": detect_duration_ms,
         "render_duration_ms": render_duration_ms,
         "total_duration_ms": total_duration_ms,
+        "stage_durations_ms": stage_durations_ms,
+        "slowest_stage": max(stage_durations_ms, key=stage_durations_ms.__getitem__),
         "query": query_body,
+        "investigation_anchor": investigation_anchor,
     }
+    if input_quality is not None:
+        payload["input_quality"] = input_quality.to_payload()
+        payload["fail_on_input_errors"] = fail_on_input_errors
+    return payload
 
 
 def _print_stats_summary(
@@ -272,32 +295,42 @@ def _print_stats_summary(
     normalize_report: NormalizeReport,
     correlation: dict[str, Any],
     alerts_count: int,
-    configured_alert_queues: list[str] | None,
-    include_dev_queue: bool,
     suppressed_alerts: int,
     total_duration_ms: int,
+    input_quality: InputQualityReport | None = None,
 ) -> None:
     normalized_summary = (
         ", ".join(f"{eid}: {count}" for eid, count in sorted(counts_by_eid.items())) or "none"
-    )
-    suspicious_destinations = sum(
-        1 for entry in correlation.get("network_activity", []) if entry.get("suspicious")
     )
     summary_rows = [
         ("Fetched hits", str(hits_count)),
         ("Normalized by EID", normalized_summary),
         ("Dropped events", str(normalize_report.dropped_count)),
+        ("Unsupported events", str(normalize_report.unsupported_count)),
         ("Invalid timestamps", str(normalize_report.invalid_timestamp_count)),
         ("Artifacts", str(len(correlation.get("artifacts", [])))),
-        ("Alerts", str(alerts_count)),
+        ("File deletions", str(len(correlation.get("file_delete_activity", [])))),
+        ("Behavior findings", str(alerts_count)),
+        ("Suppressed findings", str(suppressed_alerts)),
+        ("Network connections", str(len(correlation.get("network_activity", [])))),
+        ("Registry events", str(len(correlation.get("registry_activity", [])))),
+        ("DNS queries", str(len(correlation.get("dns_activity", [])))),
+        ("Process access events", str(len(correlation.get("process_access_activity", [])))),
+        ("Remote logons", str(len(correlation.get("authentication_activity", [])))),
+        ("Service installs", str(len(correlation.get("service_install_activity", [])))),
+        ("Scheduled tasks", str(len(correlation.get("scheduled_task_activity", [])))),
+        ("Remote-activity leads", str(len(correlation.get("remote_activity_leads", [])))),
         (
-            "Queue filter",
-            ",".join(configured_alert_queues or ["all"]) + ("+dev" if include_dev_queue else ""),
+            "Process terminations",
+            str(len(correlation.get("process_termination_activity", []))),
         ),
-        ("Suppressed alerts", str(suppressed_alerts)),
-        ("Suspicious destinations", str(suspicious_destinations)),
         ("Total duration (ms)", str(total_duration_ms)),
     ]
+    if input_quality is not None:
+        summary_rows[1:1] = [
+            ("Input integrity", input_quality.integrity),
+            ("Rejected input records", str(input_quality.rejected_records)),
+        ]
     width = max(len(label) for label, _ in summary_rows)
     for label, value in summary_rows:
         typer.echo(f"{label.ljust(width)} : {value}")
@@ -306,14 +339,15 @@ def _print_stats_summary(
 def _print_alert_list(
     *,
     alerts: list[Alert],
-    min_alert_score: int,
     sanitizer: OutputSanitizer | None,
 ) -> None:
-    typer.echo(f"Alerts (score >= {min_alert_score}): {len(alerts)}")
+    typer.echo(f"Behavior findings: {len(alerts)}")
     for alert in alerts:
         destination = ""
         if alert.destination_ip:
             destination = f" {alert.destination_ip}:{alert.destination_port or ''}".rstrip(":")
+        elif alert.source_ip:
+            destination = f" source={alert.source_ip}:{alert.source_port or ''}".rstrip(":")
         iso_time = alert.utc_time.isoformat().replace("+00:00", "Z")
         alert_type = alert.alert_type
         image = alert.image
@@ -323,5 +357,7 @@ def _print_alert_list(
             alert_type = sanitizer.sanitize_text(alert_type) or alert_type
             image = sanitizer.sanitize_text(image) or image
             reason = sanitizer.sanitize_text(reason) or reason
-        typer.echo(f"[{alert.score}] {iso_time} {alert_type} {image}{destination} - {reason}")
-
+        typer.echo(
+            f"[{alert.evidence_strength.value}] {iso_time} {alert_type} "
+            f"{image}{destination} - {reason}"
+        )

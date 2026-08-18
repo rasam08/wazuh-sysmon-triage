@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.1.0",
+  "schema_version": "2.4.0",
   "stats_keys": [
     "artifacts",
     "correlate_duration_ms",
@@ -11,11 +11,11 @@
     "events_per_second",
     "fetch_duration_ms",
     "hits",
+    "input_quality",
     "invalid_timestamp_by_eid",
     "invalid_timestamp_count",
     "nodes",
     "normalize_duration_ms",
-    "queue_filter",
     "render_duration_ms",
     "schema_version",
     "suppressed_alerts",
@@ -23,15 +23,29 @@
     "suppression_hits",
     "total_duration_ms",
     "total_events",
-    "truncation"
+    "truncation",
+    "unsupported_by_eid",
+    "unsupported_count"
   ],
   "process_tree_keys": [
     "agent",
     "artifacts",
+    "authentication_activity",
+    "dns_activity",
     "edges",
+    "file_delete_activity",
+    "host_keys",
+    "network_activity",
     "nodes",
+    "process_access_activity",
+    "process_termination_activity",
+    "registry_activity",
+    "remote_activity_leads",
+    "scheduled_task_activity",
     "schema_version",
-    "time_range"
+    "service_install_activity",
+    "time_range",
+    "unresolved_relationships"
   ],
   "total_events": 3,
   "events_by_type": {

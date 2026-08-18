@@ -85,7 +85,9 @@ def _read_json_lines(path: Path, max_entries: int = 5000) -> list[dict[str, Any]
             rows.append(payload)
     if len(rows) > max_entries:
         rows = rows[-max_entries:]
-        _write_text_atomic(path, "\n".join(json.dumps(row, separators=(",", ":")) for row in rows) + "\n")
+        _write_text_atomic(
+            path, "\n".join(json.dumps(row, separators=(",", ":")) for row in rows) + "\n"
+        )
     return rows
 
 
@@ -113,17 +115,19 @@ def build_telemetry_summary(history: list[dict[str, Any]]) -> dict[str, Any]:
         failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
     top_failure_reasons = [
         {"reason": reason, "count": count}
-        for reason, count in sorted(failure_reasons.items(), key=lambda item: (-item[1], item[0]))[:5]
+        for reason, count in sorted(failure_reasons.items(), key=lambda item: (-item[1], item[0]))[
+            :5
+        ]
     ]
 
     successful_live_runs = [
-        row
-        for row in successful
-        if str(row.get("mode") or "").lower() == "live"
+        row for row in successful if str(row.get("mode") or "").lower() == "live"
     ]
     last_successful_live_fetch_at = None
     if successful_live_runs:
-        last_successful_live_fetch_at = max(str(row.get("ts") or "") for row in successful_live_runs)
+        last_successful_live_fetch_at = max(
+            str(row.get("ts") or "") for row in successful_live_runs
+        )
 
     return {
         "generated_at": _now_iso(),
@@ -246,7 +250,9 @@ def apply_artifact_retention(
     max_age_days_raw = policy.get("max_age_days")
     max_total_size_mb_raw = policy.get("max_total_size_mb")
     max_age_days = _to_int(max_age_days_raw, 0) if max_age_days_raw is not None else 0
-    max_total_size_mb = _to_int(max_total_size_mb_raw, 0) if max_total_size_mb_raw is not None else 0
+    max_total_size_mb = (
+        _to_int(max_total_size_mb_raw, 0) if max_total_size_mb_raw is not None else 0
+    )
     min_keep_runs = max(_to_int(policy.get("min_keep_runs"), 5), 0)
 
     root = Path(out_root)

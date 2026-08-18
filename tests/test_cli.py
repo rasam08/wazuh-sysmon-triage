@@ -1,13 +1,46 @@
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from typer.testing import CliRunner
 
 import wazuh_sysmon_triage.cli as cli
+from wazuh_sysmon_triage.models.evidence import SourceRef
+from wazuh_sysmon_triage.output_schema import OUTPUT_SCHEMA_VERSION
 from wazuh_sysmon_triage.pipeline.fetch import FetchResult
+from wazuh_sysmon_triage.pipeline.investigate import InvestigationAnchor
 
 runner = CliRunner()
+
+
+def test_cli_version() -> None:
+    result = runner.invoke(cli.app, ["--version"])
+    assert result.exit_code == 0
+    assert result.stdout.strip() == f"wazuh-sysmon-triage {cli.__version__}"
+
+
+def _resolved_config(**overrides: Any) -> dict[str, Any]:
+    arguments = {
+        "config_path": None,
+        "profile": None,
+        "start": None,
+        "end": None,
+        "agent_id": None,
+        "agent_name": None,
+        "out_dir": None,
+        "host": None,
+        "user": None,
+        "password": None,
+        "verify_tls": None,
+        "index_pattern": None,
+        "event_ids": None,
+        "allowlist_image": None,
+        "print_stats": None,
+        "alerts_only": None,
+    }
+    arguments.update(overrides)
+    return cli._resolve_config(**arguments)
 
 
 def _single_case_dir(base: Path) -> Path:
@@ -158,8 +191,10 @@ def test_run_case_id_outputs(tmp_path, monkeypatch) -> None:
     assert (case_dir / "stats.json").exists()
 
     query = json.loads((case_dir / "query.json").read_text(encoding="utf-8"))
-    eid_should = query["query"]["bool"]["filter"][2]["bool"]["should"]
-    assert {"terms": {"data.win.system.eventID": [1, 3, 11]}} in eid_should
+    evidence_filter = query["query"]["bool"]["filter"][2]
+    assert "data.win.system.eventID" in str(evidence_filter)
+    assert "[1, 3, 11]" in str(evidence_filter)
+    assert "Microsoft-Windows-Sysmon" in str(evidence_filter)
 
     report_text = (case_dir / "report.md").read_text(encoding="utf-8")
     assert "Case ID" in report_text
@@ -193,18 +228,18 @@ def test_run_offline_ndjson(tmp_path) -> None:
     assert "powershell.exe" in process_tree
 
     report_text = (case_dir / "report.md").read_text(encoding="utf-8")
-    assert "Artifacts & IOCs" in report_text
-    assert "## Alerts" in report_text
+    assert "Observed file activity" in report_text
+    assert "## Behavior findings" in report_text
 
     alerts_text = (case_dir / "alerts.csv").read_text(encoding="utf-8")
     assert (
-        "utc_time,score,alert_type,category,queue,confidence,reason,routing_why,image,command_line,parent_image,destination_ip,destination_port,process_guid,tags"
+        "alert_id,utc_time,alert_type,category,finding_kind,evidence_strength,reason,host_key,image,command_line,parent_image,destination_ip,destination_port,process_guid,evidence_refs,tags"
         in alerts_text
     )
 
     artifacts_text = (case_dir / "process_tree.json").read_text(encoding="utf-8")
     assert "lab_demo.ps1" in artifacts_text
-    assert "HIGH" in artifacts_text
+    assert '"relationship_strength": "deterministic"' in artifacts_text
 
     log_path = case_dir / "run.log.ndjson"
     explicit_log_path = out_dir / "run.log.ndjson"
@@ -222,7 +257,7 @@ def test_run_offline_ndjson(tmp_path) -> None:
     assert "render" in stages
 
     metadata = json.loads((case_dir / "run_metadata.json").read_text(encoding="utf-8"))
-    assert metadata["schema_version"] == "1.1.0"
+    assert metadata["schema_version"] == OUTPUT_SCHEMA_VERSION
     for key in [
         "fetch_duration_ms",
         "normalize_duration_ms",
@@ -235,7 +270,7 @@ def test_run_offline_ndjson(tmp_path) -> None:
         assert metadata[key] >= 0
 
     stats = json.loads((case_dir / "stats.json").read_text(encoding="utf-8"))
-    assert stats["schema_version"] == "1.1.0"
+    assert stats["schema_version"] == OUTPUT_SCHEMA_VERSION
     assert "network_connect" in stats["events_by_type"]
     assert "events_per_second" in stats
 
@@ -442,7 +477,6 @@ def test_run_config_alert_precedence(tmp_path) -> None:
     config_path.write_text(
         "\n".join(
             [
-                "min_alert_score: 95",
                 "alert_allowlist_basenames:",
                 "  - mshta.exe",
             ]
@@ -480,8 +514,6 @@ def test_run_config_alert_precedence(tmp_path) -> None:
             str(config_path),
             "--allowlist-image",
             "chrome.exe",
-            "--min-alert-score",
-            "70",
         ],
     )
     assert result_b.exit_code == 0
@@ -520,7 +552,6 @@ def test_profile_merging_with_cli_override(tmp_path) -> None:
                 "profiles:",
                 "  soc:",
                 "    agent_name: profile-agent",
-                "    min_alert_score: 88",
                 "    alerts_only: true",
                 "    print_stats: true",
             ]
@@ -528,29 +559,12 @@ def test_profile_merging_with_cli_override(tmp_path) -> None:
         encoding="utf-8",
     )
 
-    resolved = cli._resolve_config(
-        str(cfg),
-        "soc",
-        None,
-        None,
-        None,
-        "cli-agent",
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        70,
-        None,
-        None,
-        None,
-        None,
-        None,
+    resolved = _resolved_config(
+        config_path=str(cfg),
+        profile="soc",
+        agent_name="cli-agent",
     )
     assert resolved["agent_name"] == "cli-agent"
-    assert resolved["min_alert_score"] == 70
     assert resolved["alerts_only"] is True
     assert resolved["print_stats"] is True
 
@@ -559,53 +573,16 @@ def test_lab_profile_defaults_verify_tls_off(tmp_path) -> None:
     cfg = tmp_path / "cfg.yaml"
     cfg.write_text("profiles:\n  lab:\n    agent_name: lab-agent\n", encoding="utf-8")
 
-    resolved = cli._resolve_config(
-        str(cfg),
-        "lab",
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
+    resolved = _resolved_config(
+        config_path=str(cfg),
+        profile="lab",
     )
     assert resolved["verify_tls"] is False
 
 
 def test_verify_tls_env_override(monkeypatch) -> None:
     monkeypatch.setenv("WAZUH_OS_VERIFY_TLS", "false")
-    resolved = cli._resolve_config(
-        None,
-        "soc",
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-    )
+    resolved = _resolved_config(profile="soc")
     assert resolved["verify_tls"] is False
 
 
@@ -623,51 +600,11 @@ def test_config_password_ignored_in_favor_of_env(tmp_path, monkeypatch) -> None:
     )
 
     monkeypatch.delenv("WAZUH_OS_PASSWORD", raising=False)
-    resolved = cli._resolve_config(
-        str(cfg),
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-    )
+    resolved = _resolved_config(config_path=str(cfg))
     assert resolved["password"] is None
 
     monkeypatch.setenv("WAZUH_OS_PASSWORD", "env-secret")
-    resolved_env = cli._resolve_config(
-        str(cfg),
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-    )
+    resolved_env = _resolved_config(config_path=str(cfg))
     assert resolved_env["password"] == "env-secret"  # pragma: allowlist secret
 
 
@@ -776,7 +713,7 @@ def test_live_and_offline_commands(tmp_path) -> None:
     assert live.exit_code in {0, 2, 3}
 
 
-def test_offline_queue_filter_excludes_non_matching_queues(tmp_path) -> None:
+def test_removed_score_and_queue_options_are_rejected(tmp_path) -> None:
     sample_path = (
         Path(__file__).resolve().parents[1]
         / "samples"
@@ -794,16 +731,11 @@ def test_offline_queue_filter_excludes_non_matching_queues(tmp_path) -> None:
             str(out_dir),
             "--case-id",
             "queue-filter",
-            "--queue",
-            "soc_policy",
             "--min-alert-score",
-            "0",
+            "70",
         ],
     )
-    assert result.exit_code == 0
-
-    alerts_lines = (out_dir / "alerts.csv").read_text(encoding="utf-8").splitlines()
-    assert len(alerts_lines) == 1
+    assert result.exit_code == 2
 
 
 def test_live_window_defaults_and_today_override(monkeypatch, tmp_path) -> None:
@@ -900,7 +832,7 @@ def test_live_dry_run_query_without_opensearch_creds(tmp_path) -> None:
     payload_start = result.stdout.find("{")
     payload = json.loads(result.stdout[payload_start:])
     assert payload["mode"] == "live"
-    assert payload["schema_version"] == "1.1.0"
+    assert payload["schema_version"] == OUTPUT_SCHEMA_VERSION
     assert payload["query"]["query"]["bool"]["filter"]
 
 
@@ -1152,3 +1084,90 @@ def test_offline_sanitize_redacts_internal_ip_and_user(tmp_path) -> None:
 
     assert "internal-ip-001" in corpus
     assert "HOST\\user001" in corpus
+
+
+def test_alert_command_collects_bounded_context_from_anchor(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+
+    class DummyClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def close(self) -> None:
+            return None
+
+    anchor = InvestigationAnchor(
+        document_id="wazuh-alert-123",
+        index="wazuh-alerts-4.x-2024.01.01",
+        timestamp=datetime(2024, 1, 1, 12, 0, tzinfo=UTC),
+        agent_id="001",
+        agent_name="HOST-A",
+        agent_ip="192.0.2.5",
+        computer="HOST-A",
+        event_id=1,
+        rule_id="92000",
+        rule_level=12,
+        rule_description="Triggering behavior",
+        rule_groups=["sysmon"],
+        mitre={"id": ["T1059.001"]},
+        source_ref=SourceRef(
+            source_type="opensearch_hit",
+            index="wazuh-alerts-4.x-2024.01.01",
+            document_id="wazuh-alert-123",
+            raw_digest="a" * 64,
+        ),
+    )
+
+    def fake_anchor(*_args, **_kwargs):
+        return anchor
+
+    def fake_execute(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(cli, "OpenSearchClient", DummyClient)
+    monkeypatch.setattr(cli, "fetch_investigation_anchor", fake_anchor)
+    monkeypatch.setattr(cli, "_execute_run", fake_execute)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "alert",
+            "wazuh-alert-123",
+            "--before",
+            "5m",
+            "--after",
+            "10m",
+            "--host",
+            "https://example:9200",
+            "--user",
+            "admin",
+            "--password",
+            "dummy-password",
+            "--context-index-pattern",
+            "wazuh-archives-4.x-*",
+            "--out-dir",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["start"] == "2024-01-01T11:55:00Z"
+    assert captured["end"] == "2024-01-01T12:10:00Z"
+    assert captured["agent_id"] == "001"
+    assert captured["agent_name"] == "HOST-A"
+    assert captured["fail_on_truncation"] is True
+    assert captured["quarantine_drops"] is True
+    assert captured["index_pattern"] == "wazuh-archives-4.x-*"
+    anchor_payload = captured["investigation_anchor"]
+    assert isinstance(anchor_payload, dict)
+    assert anchor_payload["document_id"] == "wazuh-alert-123"
+    assert anchor_payload["alert_index_pattern"] == "wazuh-alerts-4.x-*"
+    assert anchor_payload["context_index_pattern"] == "wazuh-archives-4.x-*"
+    assert anchor_payload["context_source"] == "wazuh_archives"
+
+
+def test_alert_command_names_invalid_context_option() -> None:
+    result = runner.invoke(cli.app, ["alert", "wazuh-alert-123", "--before", "invalid"])
+
+    assert result.exit_code == 2
+    assert "--before must look like 15m, 2h, or 7d" in result.output

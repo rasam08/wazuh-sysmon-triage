@@ -31,9 +31,9 @@ def _snapshot_case(case_dir: Path) -> dict:
     alert_digest = [
         {
             "alert_type": row.get("alert_type", ""),
-            "queue": row.get("queue", ""),
-            "confidence": row.get("confidence", ""),
-            "score": int(row.get("score") or 0),
+            "category": row.get("category", ""),
+            "finding_kind": row.get("finding_kind", ""),
+            "evidence_strength": row.get("evidence_strength", ""),
         }
         for row in alerts_rows
     ]

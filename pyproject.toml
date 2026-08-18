@@ -1,12 +1,24 @@
 [tool.poetry]
 name = "wazuh-sysmon-triage"
-version = "1.0.0"
-description = "A CLI tool for triaging Sysmon data in Wazuh."
-authors = ["Rasam Moghaddam"]
-homepage = "https://github.com/rasam08"
+version = "2.0.0"
+description = "Deterministic CLI triage for Windows endpoint telemetry collected by Wazuh."
+authors = ["Rasam Moghaddam <rasammgg@gmail.com>"]
+homepage = "https://github.com/rasam08/wazuh-sysmon-triage"
+repository = "https://github.com/rasam08/wazuh-sysmon-triage"
+documentation = "https://github.com/rasam08/wazuh-sysmon-triage#readme"
 license = "MIT"
 readme = "README.md"
-keywords = ["wazuh", "sysmon", "cli", "triage"]
+keywords = ["wazuh", "sysmon", "opensearch", "incident-response", "digital-forensics", "cli"]
+classifiers = [
+	"Development Status :: 4 - Beta",
+	"Environment :: Console",
+	"Intended Audience :: Information Technology",
+	"License :: OSI Approved :: MIT License",
+	"Operating System :: OS Independent",
+	"Programming Language :: Python :: 3",
+	"Programming Language :: Python :: 3.12",
+	"Topic :: Security",
+]
 include = [
 	{ path = "src/wazuh_sysmon_triage/py.typed", format = ["sdist", "wheel"] }
 ]
@@ -21,11 +33,10 @@ triage = "wazuh_sysmon_triage.__main__:main"
 
 [tool.poetry.dependencies]
 python = ">=3.12"
-typer = "^0.4.0"
+typer = "^0.27.0"
 pydantic = ">=2.0"
 httpx = ">=0.23.0"
 pyyaml = "^6.0"
-click = "<8.2"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
@@ -53,6 +64,10 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+testpaths = ["tests"]
+markers = [
+	"performance: bounded offline runtime and memory qualification tests",
+]
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]

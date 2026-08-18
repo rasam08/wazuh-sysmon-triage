@@ -2,73 +2,90 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime
-from typing import Any
+from typing import Any, TypeVar
 
 from wazuh_sysmon_triage.models.sysmon import (
+    DnsQueryEvent,
     FileCreateEvent,
     NetworkConnectEvent,
+    ProcessAccessEvent,
     ProcessCreateEvent,
+    ProcessLinkedEvent,
+    RegistryEvent,
     SysmonEvent,
 )
 
-from .detect_types import DetectionContexts
+from .detect_types import DetectionContexts, ProcessKey
+
+EventT = TypeVar(
+    "EventT",
+    ProcessCreateEvent,
+    NetworkConnectEvent,
+    FileCreateEvent,
+    RegistryEvent,
+    DnsQueryEvent,
+    ProcessAccessEvent,
+)
 
 
-def _build_process_context(events: list[SysmonEvent]) -> dict[str, list[ProcessCreateEvent]]:
-    by_guid: defaultdict[str, list[ProcessCreateEvent]] = defaultdict(list)
+def _process_key(event: ProcessLinkedEvent, guid: str | None = None) -> ProcessKey:
+    return (event.host_key or "unknown:constructed", guid or event.process_guid)
+
+
+def _group_by_process(  # noqa: UP047 -- project supports Python versions before PEP 695
+    events: list[EventT],
+) -> dict[ProcessKey, list[EventT]]:
+    grouped: defaultdict[ProcessKey, list[EventT]] = defaultdict(list)
     for event in events:
-        if isinstance(event, ProcessCreateEvent):
-            by_guid[event.process_guid].append(event)
-    for rows in by_guid.values():
+        grouped[_process_key(event)].append(event)
+    for rows in grouped.values():
         rows.sort(key=lambda row: row.timestamp)
-    return dict(by_guid)
+    return dict(grouped)
 
 
-def _build_network_context(events: list[SysmonEvent]) -> dict[str, list[NetworkConnectEvent]]:
-    by_guid: defaultdict[str, list[NetworkConnectEvent]] = defaultdict(list)
-    for event in events:
-        if isinstance(event, NetworkConnectEvent):
-            by_guid[event.process_guid].append(event)
-    for rows in by_guid.values():
-        rows.sort(key=lambda row: row.timestamp)
-    return dict(by_guid)
-
-
-def _build_file_context(events: list[SysmonEvent]) -> dict[str, list[FileCreateEvent]]:
-    by_guid: defaultdict[str, list[FileCreateEvent]] = defaultdict(list)
-    for event in events:
-        if isinstance(event, FileCreateEvent) and event.process_guid:
-            by_guid[event.process_guid].append(event)
-    for rows in by_guid.values():
-        rows.sort(key=lambda row: row.timestamp)
-    return dict(by_guid)
-
-
-def _build_children_context(events: list[SysmonEvent]) -> dict[str, list[ProcessCreateEvent]]:
-    by_parent: defaultdict[str, list[ProcessCreateEvent]] = defaultdict(list)
+def _build_children_context(
+    events: list[SysmonEvent],
+) -> dict[ProcessKey, list[ProcessCreateEvent]]:
+    grouped: defaultdict[ProcessKey, list[ProcessCreateEvent]] = defaultdict(list)
     for event in events:
         if isinstance(event, ProcessCreateEvent) and event.parent_process_guid:
-            by_parent[event.parent_process_guid].append(event)
-    for rows in by_parent.values():
+            grouped[_process_key(event, event.parent_process_guid)].append(event)
+    for rows in grouped.values():
         rows.sort(key=lambda row: row.timestamp)
-    return dict(by_parent)
+    return dict(grouped)
 
 
 def _build_detection_contexts(events: list[SysmonEvent]) -> DetectionContexts:
     return DetectionContexts(
-        process_creates=_build_process_context(events),
-        network_by_guid=_build_network_context(events),
-        files_by_guid=_build_file_context(events),
+        process_creates=_group_by_process(
+            [event for event in events if isinstance(event, ProcessCreateEvent)]
+        ),
+        network_by_process=_group_by_process(
+            [event for event in events if isinstance(event, NetworkConnectEvent)]
+        ),
+        files_by_process=_group_by_process(
+            [event for event in events if isinstance(event, FileCreateEvent)]
+        ),
+        registry_by_process=_group_by_process(
+            [event for event in events if isinstance(event, RegistryEvent)]
+        ),
+        dns_by_process=_group_by_process(
+            [event for event in events if isinstance(event, DnsQueryEvent)]
+        ),
+        process_access_by_source=_group_by_process(
+            [event for event in events if isinstance(event, ProcessAccessEvent)]
+        ),
         children_by_parent=_build_children_context(events),
     )
 
 
 def _find_process_create(
-    process_creates: dict[str, list[ProcessCreateEvent]],
+    process_creates: dict[ProcessKey, list[ProcessCreateEvent]],
+    host_key: str,
     process_guid: str,
     ts: datetime,
 ) -> ProcessCreateEvent | None:
-    rows = process_creates.get(process_guid) or []
+    rows = process_creates.get((host_key, process_guid)) or []
     if not rows:
         return None
     selected = None
@@ -114,4 +131,3 @@ def _role_tags_for_event(event: SysmonEvent, context_roles: dict[str, dict[str, 
             else:
                 tags.add(f"role:{role_name.lower()}")
     return tags
-

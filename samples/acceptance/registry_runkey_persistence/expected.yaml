@@ -1,0 +1,20 @@
+schema_version: 1
+scenario: registry_runkey_persistence
+provenance: synthetic
+required_findings:
+- type: registry_persistence_location_modified
+  finding_kind: correlated_pattern
+  evidence_strength: deterministic
+forbidden_findings:
+- malicious_verdict
+expected_unknowns:
+- the referenced executable content was not collected
+minimum_process_edges: 0
+minimum_unresolved_relationships: 0
+expected_counts:
+  input_records: 2
+  selected_records: 2
+  omitted_records: 0
+  input_rejected: 0
+  normalize_dropped: 0
+  unsupported: 0

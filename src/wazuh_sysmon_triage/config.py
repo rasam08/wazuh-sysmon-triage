@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import os
 from datetime import datetime
 from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from wazuh_sysmon_triage.windows_paths import windows_basename
 
 
 class SuppressionRuleConfig(BaseModel):
@@ -58,7 +59,7 @@ class ArtifactRetentionConfig(BaseModel):
 
 
 class ProfileConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     start: str | None = None
     end: str | None = None
@@ -71,20 +72,16 @@ class ProfileConfig(BaseModel):
     verify_tls: bool | None = None
     index_pattern: str | None = None
     event_ids: list[int] | None = None
-    min_alert_score: int | None = Field(None, ge=0, le=100)
-    destination_scoring_mode: Literal["strict", "balanced", "lab"] | None = None
     alert_allowlist_basenames: list[str] | None = None
     suppressions: SuppressionSettings | None = None
     context_roles: dict[str, ContextRoleMatcher] | None = None
-    alert_queues: list[str] | None = None
-    include_dev_queue: bool | None = None
     print_stats: bool | None = None
     alerts_only: bool | None = None
     artifact_retention: ArtifactRetentionConfig | None = None
 
 
 class Config(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     # These can be provided via CLI flags; keep optional so connection-only config files work.
     start: str | None = Field(None, description="Start time in ISO8601 format")
@@ -99,17 +96,9 @@ class Config(BaseModel):
     index_pattern: str = Field("wazuh-alerts-4.x-*", description="Index pattern for OpenSearch")
     event_ids: list[int] | None = Field(
         None,
-        description="Sysmon event IDs to include (e.g. [1, 3, 11]). If omitted, defaults apply.",
-    )
-    min_alert_score: int | None = Field(
-        None,
-        ge=0,
-        le=100,
-        description="Minimum score for emitted alerts. If omitted, code defaults apply.",
-    )
-    destination_scoring_mode: Literal["strict", "balanced", "lab"] | None = Field(
-        None,
-        description="Destination scoring mode for network suspiciousness.",
+        description=(
+            "Sysmon event IDs to include. If omitted, the supported high-value evidence set applies."
+        ),
     )
     alert_allowlist_basenames: list[str] | None = Field(
         None,
@@ -122,14 +111,6 @@ class Config(BaseModel):
     context_roles: dict[str, ContextRoleMatcher] = Field(
         default_factory=dict,
         description="Context role mapping for tagging (developer/dev workstation context).",
-    )
-    alert_queues: list[str] | None = Field(
-        None,
-        description="Optional alert queue filter (e.g. [soc_malware, soc_policy]).",
-    )
-    include_dev_queue: bool = Field(
-        False,
-        description="Include soc_dev queue in output filters.",
     )
     active_profile: str | None = Field(
         None,
@@ -163,7 +144,7 @@ class Config(BaseModel):
         values = [value] if isinstance(value, str) else list(value)
         normalized = []
         for entry in values:
-            text = os.path.basename(str(entry)).strip().lower()
+            text = windows_basename(str(entry)).strip()
             if text:
                 normalized.append(text)
         return normalized

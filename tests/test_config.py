@@ -22,13 +22,11 @@ def test_config_validation():
         "pass": "password",
         "verify_tls": True,
         "index_pattern": "wazuh-alerts-4.x-*",
-        "min_alert_score": 75,
         "alert_allowlist_basenames": ["chrome.exe", "MsMpEng.exe"],
     }
     config = Config(**valid_data)
     assert config.agent_id == "12345"
     assert config.verify_tls is True
-    assert config.min_alert_score == 75
     assert config.alert_allowlist_basenames == ["chrome.exe", "msmpeng.exe"]
 
 
@@ -49,9 +47,9 @@ def test_config_invalid_data():
         Config(**invalid_data)
 
 
-def test_config_invalid_alert_threshold() -> None:
-    with pytest.raises(ValueError):
-        Config(min_alert_score=101)
+def test_removed_score_settings_fail_explicitly() -> None:
+    with pytest.raises(ValueError, match="min_alert_score"):
+        Config(min_alert_score=70)
 
 
 def test_config_inline_password_detection(tmp_path) -> None:

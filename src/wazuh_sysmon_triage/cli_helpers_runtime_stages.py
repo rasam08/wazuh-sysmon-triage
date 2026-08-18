@@ -9,12 +9,14 @@ from wazuh_sysmon_triage.models.alerts import Alert
 from wazuh_sysmon_triage.models.raw import RawHit
 from wazuh_sysmon_triage.models.sysmon import SysmonEvent
 from wazuh_sysmon_triage.pipeline.correlate import correlate_data
-from wazuh_sysmon_triage.pipeline.detect import filter_alerts, run_detection
+from wazuh_sysmon_triage.pipeline.detect import run_detection
+from wazuh_sysmon_triage.pipeline.ndjson import InputQualityReport
 from wazuh_sysmon_triage.pipeline.normalize import normalize_data_with_report
 from wazuh_sysmon_triage.pipeline.pivot import assign_alert_ids, build_pivot_bundles
 from wazuh_sysmon_triage.pipeline.render import (
     render_alert_bundles,
     render_alerts_csv,
+    render_investigation_anchor,
     render_process_tree,
     render_report,
     render_timeline,
@@ -28,7 +30,7 @@ from .cli_helpers_runtime_types import (
     NormalizeStageResult,
     TruncationInfo,
 )
-from .cli_helpers_runtime_utils import _filter_alerts_by_queue, _process_line
+from .cli_helpers_runtime_utils import _process_line
 
 
 def _run_normalize_stage(
@@ -39,6 +41,7 @@ def _run_normalize_stage(
     quarantine_drops: bool,
     out_dir: str,
     sanitizer: OutputSanitizer | None,
+    append_quarantine: bool = False,
 ) -> NormalizeStageResult:
     logger.info(
         "Normalize start",
@@ -62,9 +65,10 @@ def _run_normalize_stage(
 
     if quarantine_drops and normalize_report.dropped_events:
         quarantine_path = os.path.join(out_dir, "quarantine.ndjson")
-        with open(quarantine_path, "w", encoding="utf-8") as handle:
+        mode = "a" if append_quarantine else "w"
+        with open(quarantine_path, mode, encoding="utf-8") as handle:
             for dropped in normalize_report.dropped_events:
-                payload: dict[str, Any] = dropped
+                payload: dict[str, Any] = {"stage": "normalize", **dropped}
                 if sanitizer:
                     payload = sanitizer.sanitize_obj(payload)
                 handle.write(json.dumps(payload))
@@ -98,14 +102,10 @@ def _run_correlate_stage(
     logger: logging.Logger,
     run_ctx: RunContext,
     events: list[SysmonEvent],
-    destination_scoring_mode: str,
 ) -> CorrelateStageResult:
     _process_line("correlate", "building graph...")
     with timed("correlate", logger, run_ctx) as timer:
-        correlation = correlate_data(
-            events,
-            destination_scoring_mode=destination_scoring_mode,
-        )
+        correlation = correlate_data(events)
     duration_ms = timer["duration_ms"]
     logger.info(
         "Correlate complete",
@@ -118,7 +118,16 @@ def _run_correlate_stage(
                 "nodes": len(correlation.get("nodes", [])),
                 "edges": len(correlation.get("edges", [])),
                 "artifacts": len(correlation.get("artifacts", [])),
+                "file_deletions": len(correlation.get("file_delete_activity", [])),
                 "network": len(correlation.get("network_activity", [])),
+                "registry": len(correlation.get("registry_activity", [])),
+                "dns": len(correlation.get("dns_activity", [])),
+                "process_access": len(correlation.get("process_access_activity", [])),
+                "process_terminations": len(correlation.get("process_termination_activity", [])),
+                "authentication": len(correlation.get("authentication_activity", [])),
+                "service_installs": len(correlation.get("service_install_activity", [])),
+                "scheduled_tasks": len(correlation.get("scheduled_task_activity", [])),
+                "remote_activity_leads": len(correlation.get("remote_activity_leads", [])),
             },
         },
     )
@@ -134,11 +143,8 @@ def _run_detect_stage(
     suppression_rules: list[dict[str, Any]],
     allowlist_override_rules: list[dict[str, Any]],
     context_roles: dict[str, dict[str, Any]],
-    min_alert_score: int,
-    configured_alert_queues: list[str] | None,
-    include_dev_queue: bool,
 ) -> DetectStageResult:
-    _process_line("detect", "scoring alerts...")
+    _process_line("detect", "evaluating transparent behavior rules...")
     with timed("detect", logger, run_ctx) as timer:
         detection_result = run_detection(
             events,
@@ -148,12 +154,7 @@ def _run_detect_stage(
             context_roles=context_roles,
         )
         all_alerts = assign_alert_ids(detection_result.alerts)
-        score_filtered_alerts = filter_alerts(all_alerts, min_score=min_alert_score)
-        alerts = _filter_alerts_by_queue(
-            score_filtered_alerts,
-            alert_queues=configured_alert_queues,
-            include_dev_queue=include_dev_queue,
-        )
+        alerts = all_alerts
         pivot_bundles = build_pivot_bundles(
             alerts,
             events,
@@ -172,7 +173,6 @@ def _run_detect_stage(
             "counts": {
                 "all_alerts": len(all_alerts),
                 "alerts_emitted": len(alerts),
-                "min_alert_score": min_alert_score,
                 "suppressed_alerts": detection_result.suppressed_alerts,
                 "suppressed_events": detection_result.suppressed_events,
             },
@@ -200,13 +200,18 @@ def _run_render_stage(
     truncation: TruncationInfo,
     out_dir: str,
     sanitizer: OutputSanitizer | None,
+    investigation_anchor: dict[str, Any] | None = None,
+    input_quality: InputQualityReport | None = None,
 ) -> int:
-    _process_line("render", f"writing {4 + len(pivot_bundles)} outputs...")
+    output_count = 4 + len(pivot_bundles) + (1 if investigation_anchor else 0)
+    _process_line("render", f"writing {output_count} outputs...")
     with timed("render", logger, run_ctx) as timer:
         render_timeline(events, out_dir, sanitizer=sanitizer)
         render_process_tree(correlation, out_dir, sanitizer=sanitizer)
         render_alerts_csv(alerts, out_dir, sanitizer=sanitizer)
         render_alert_bundles(pivot_bundles, out_dir, sanitizer=sanitizer)
+        if investigation_anchor:
+            render_investigation_anchor(investigation_anchor, out_dir, sanitizer=sanitizer)
         render_report(
             {
                 **correlation,
@@ -215,6 +220,8 @@ def _run_render_stage(
                 "query": query_body,
                 "case_id": case_value,
                 "truncation": truncation,
+                "investigation_anchor": investigation_anchor,
+                "input_quality": input_quality.to_payload() if input_quality else None,
             },
             out_dir,
             sanitizer=sanitizer,
@@ -227,8 +234,7 @@ def _run_render_stage(
             "stage": "render",
             "run_id": run_ctx.run_id,
             "case_id": run_ctx.case_id,
-            "counts": {"outputs": 4 + len(pivot_bundles), "out_dir": out_dir},
+            "counts": {"outputs": output_count, "out_dir": out_dir},
         },
     )
     return duration_ms
-

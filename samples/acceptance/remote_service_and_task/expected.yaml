@@ -1,0 +1,24 @@
+schema_version: 1
+scenario: remote_service_and_task
+provenance: synthetic
+required_findings:
+- type: remote_logon_followed_by_service_install
+  finding_kind: hypothesis
+  evidence_strength: strong
+- type: remote_logon_followed_by_scheduled_task
+  finding_kind: hypothesis
+  evidence_strength: strong
+forbidden_findings:
+- malicious_lateral_movement
+- malicious_verdict
+expected_unknowns:
+- the sequence is a scoping lead and does not establish malicious movement
+minimum_process_edges: 0
+minimum_unresolved_relationships: 0
+expected_counts:
+  input_records: 4
+  selected_records: 4
+  omitted_records: 0
+  input_rejected: 0
+  normalize_dropped: 0
+  unsupported: 0
