@@ -10,7 +10,7 @@ def _client_with_pit_response(
     response: dict[str, Any],
 ) -> OpenSearchClient:
     client = object.__new__(OpenSearchClient)
-    monkeypatch.setattr(client, "_request", lambda *args, **kwargs: (response, None))
+    monkeypatch.setattr(client, "_request", lambda *_args, **_kwargs: (response, None))
     return client
 
 

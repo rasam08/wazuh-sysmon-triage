@@ -62,6 +62,7 @@ def root(
     ),
 ) -> None:
     """Investigate Windows endpoint telemetry collected by Wazuh."""
+    del version
 
 # Backwards-compatible helper exports used by tests and scripts.
 _parse_iso_ts = _cli_helpers._parse_iso_ts
