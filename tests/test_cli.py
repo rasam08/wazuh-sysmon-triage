@@ -1171,7 +1171,7 @@ def test_alert_command_names_invalid_context_option() -> None:
     result = runner.invoke(cli.app, ["alert", "wazuh-alert-123", "--before", "invalid"])
 
     assert result.exit_code == 2
-    assert re.search(
-        r"--before\s+must\s+look\s+like\s+15m,\s+2h,\s+or\s+7d",
-        result.output,
-    )
+    ansi_sgr = re.escape(chr(27) + "[") + r"[0-9;]*m"
+    without_ansi = re.sub(ansi_sgr, "", result.output)
+    normalized_output = " ".join(without_ansi.split())
+    assert "--before must look like 15m, 2h, or 7d" in normalized_output
