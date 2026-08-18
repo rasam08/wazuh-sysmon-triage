@@ -173,7 +173,7 @@ class OpenSearchClient:
         self,
         index_pattern: str,
         query_body: dict[str, Any],
-        search_after: list | None = None,
+        search_after: list[Any] | None = None,
         run_id: str | None = None,
         case_id: str | None = None,
     ) -> dict[str, Any]:
@@ -266,7 +266,7 @@ class OpenSearchClient:
             case_id=case_id,
         )
         pit_id = response.get("pit_id")
-        if not pit_id:
+        if not isinstance(pit_id, str) or not pit_id:
             raise ValueError("PIT creation failed: missing pit_id")
         LOGGER.info(
             "Created PIT",
@@ -278,7 +278,7 @@ class OpenSearchClient:
         self,
         pit_id: str,
         query_body: dict[str, Any],
-        search_after: list | None = None,
+        search_after: list[Any] | None = None,
         run_id: str | None = None,
         case_id: str | None = None,
     ) -> dict[str, Any]:
