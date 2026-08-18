@@ -1,0 +1,76 @@
+name: Bounded performance qualification
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 6 * * 1"
+
+concurrency:
+  group: performance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline-scale:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install package
+        run: python -m pip install .
+      - name: Profile 10k selected events
+        run: >
+          python scripts/benchmark_offline.py
+          --source-events 10000
+          --selected-events 10000
+          --repeat 1
+          --max-seconds 30
+          --max-rss-mib 512
+          --report benchmark-report-10k.json
+      - name: Profile 50k selected events
+        run: >
+          python scripts/benchmark_offline.py
+          --source-events 50000
+          --selected-events 50000
+          --repeat 1
+          --max-seconds 90
+          --max-rss-mib 1024
+          --report benchmark-report-50k.json
+      - name: Qualify 100k selected events
+        run: >
+          python scripts/benchmark_offline.py
+          --source-events 100000
+          --selected-events 100000
+          --repeat 2
+          --max-seconds 180
+          --max-rss-mib 1536
+          --report benchmark-report-100k.json
+      - name: Reject nonlinear scaling
+        run: >
+          python scripts/compare_benchmarks.py
+          benchmark-report-10k.json
+          benchmark-report-50k.json
+          benchmark-report-100k.json
+          --output benchmark-scaling-report.json
+      - name: Qualify bounded million-line source
+        run: >
+          python scripts/benchmark_offline.py
+          --source-events 1000000
+          --selected-events 10000
+          --repeat 1
+          --max-seconds 30
+          --max-rss-mib 512
+          --report benchmark-report-million-source.json
+      - name: Retain qualification reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bounded-performance-reports
+          path: benchmark-report-*.json

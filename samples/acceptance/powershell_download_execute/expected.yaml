@@ -1,0 +1,20 @@
+schema_version: 1
+scenario: powershell_download_execute
+provenance: synthetic
+required_findings:
+- type: powershell_encoded_or_download_pattern
+  finding_kind: correlated_pattern
+  evidence_strength: strong
+forbidden_findings:
+- malicious_verdict
+expected_unknowns:
+- downloaded content was not collected
+minimum_process_edges: 1
+minimum_unresolved_relationships: 0
+expected_counts:
+  input_records: 5
+  selected_records: 5
+  omitted_records: 0
+  input_rejected: 0
+  normalize_dropped: 0
+  unsupported: 0

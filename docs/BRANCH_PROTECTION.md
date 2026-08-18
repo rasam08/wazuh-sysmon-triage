@@ -18,7 +18,8 @@ Configure this workflow check as required:
 
 - `quality-gate`
 
-This maps to `.github/workflows/ci.yml` and enforces security scans, lint, type-checks, tests, e2e smoke, and build.
+This maps to `.github/workflows/ci.yml` and enforces security scans, documentation links,
+lint, type-checks, tests, bounded performance, and package validation.
 
 ## Recommended Admin Policy
 

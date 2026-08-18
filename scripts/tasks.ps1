@@ -33,12 +33,10 @@ $pythonExe = Resolve-PythonExe
 switch ($Task) {
     "test" {
         & $pythonExe -m pytest -q
-        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        npm --prefix ui run test -- --run
         exit $LASTEXITCODE
     }
     "build" {
-        npm --prefix ui run build
+        & $pythonExe -m build
         exit $LASTEXITCODE
     }
     "smoke-live" {

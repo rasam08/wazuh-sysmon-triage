@@ -4,10 +4,10 @@ import ipaddress
 import re
 from typing import Any
 
-_WINDOWS_USER_PATH_RE = re.compile(r"(?i)(\\Users\\)([^\\]+)")
+_WINDOWS_USER_PATH_RE = re.compile(r"(?i)(\\+Users\\+)([^\\]+)")
 _LINUX_HOME_PATH_RE = re.compile(r"(?i)(/home/)([^/\s]+)")
 _DOMAIN_USER_RE = re.compile(
-    r"(?<![\\/:])\b([A-Za-z0-9._$-]{2,})\\([A-Za-z0-9._$-]{2,})\b(?!\\)"
+    r"(?<![\\/:])\b([A-Za-z0-9._$-]{2,})\\+([A-Za-z0-9._$-]{2,})\b(?!\\)"
 )
 _IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 

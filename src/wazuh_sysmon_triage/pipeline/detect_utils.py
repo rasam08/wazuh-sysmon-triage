@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import fnmatch
 import ipaddress
-import os
 import re
 from collections.abc import Iterable
 from typing import Any
@@ -14,11 +13,11 @@ from wazuh_sysmon_triage.models.sysmon import (
     SysmonEvent,
 )
 from wazuh_sysmon_triage.pipeline.network_utils import destination_class
+from wazuh_sysmon_triage.windows_paths import windows_basename
 
 from .detect_types import (
     DEFAULT_ALLOWLIST_BASENAMES,
     ENCODED_COMMAND_FLAG_RE,
-    MICROSOFT_IP_PREFIXES,
     SCRIPT_EXTENSIONS,
     TEMP_MARKERS,
     USER_WRITABLE_MARKERS,
@@ -26,9 +25,7 @@ from .detect_types import (
 
 
 def _basename(path: str | None) -> str:
-    if not path:
-        return ""
-    return os.path.basename(path).lower()
+    return windows_basename(path)
 
 
 def normalize_allowlist_basenames(values: Iterable[str] | None = None) -> set[str]:
@@ -114,7 +111,7 @@ def is_allowlisted_image(
     return _basename(image) in allowlist
 
 
-def _score_to_reason(prefix: str, hits: list[str]) -> str:
+def _hits_to_reason(prefix: str, hits: list[str]) -> str:
     if not hits:
         return prefix
     return f"{prefix}: {', '.join(hits)}"
@@ -122,12 +119,6 @@ def _score_to_reason(prefix: str, hits: list[str]) -> str:
 
 def _has_encoded_command_flag(command: str) -> bool:
     return bool(ENCODED_COMMAND_FLAG_RE.search(command))
-
-
-def _is_microsoft_destination(ip: str | None) -> bool:
-    if not ip:
-        return False
-    return any(ip.startswith(prefix) for prefix in MICROSOFT_IP_PREFIXES)
 
 
 def _temp_script_write(files: list[FileCreateEvent]) -> bool:
@@ -141,18 +132,6 @@ def _temp_script_write(files: list[FileCreateEvent]) -> bool:
 def _is_user_writable_path(value: str | None) -> bool:
     lower = (value or "").lower()
     return any(marker in lower for marker in USER_WRITABLE_MARKERS)
-
-
-def _event_host_label(event: SysmonEvent) -> str:
-    return event.agent_name or event.computer or event.agent_id or "unknown-host"
-
-
-def _host_key(value: str) -> str:
-    return value.lower()
-
-
-def _safe_tag_value(value: str) -> str:
-    return re.sub(r"[^a-z0-9_.:-]", "_", value.lower())
 
 
 def _alert_dedup_key(alert: Alert) -> tuple[str, str, str, str, int]:
@@ -170,8 +149,8 @@ def sort_alerts(alerts: Iterable[Alert]) -> list[Alert]:
     return sorted(
         alerts,
         key=lambda alert: (
-            -alert.score,
             alert.utc_time,
+            alert.host_key,
             alert.alert_type,
             alert.process_guid,
             alert.image,
@@ -197,13 +176,7 @@ def _event_key(event: SysmonEvent) -> str:
     )
 
 
-def _default_routing_why(alert: Alert) -> str:
-    return f"Routed to {alert.queue}: category={alert.category}, confidence={alert.confidence}"
-
-
-def _apply_role_tags_and_routing(alert: Alert, role_tags: set[str]) -> Alert:
+def _apply_role_tags(alert: Alert, role_tags: set[str]) -> Alert:
     if role_tags:
         alert.tags = sorted({*alert.tags, *role_tags})
-    alert.routing_why = alert.routing_why or _default_routing_why(alert)
     return alert
-

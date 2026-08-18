@@ -1,8 +1,15 @@
 name: CI
 
+permissions:
+  contents: read
+
 on:
   push:
   pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   quality-gate:
@@ -10,39 +17,33 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install .
-          python -m pip install pytest pytest-cov ruff mypy types-PyYAML
+          python -m pip install build twine pytest pytest-cov ruff mypy types-PyYAML
           python -m pip install vulture
           python -m pip install bandit pip-audit detect-secrets
-      - name: Install UI dependencies
-        run: |
-          npm --prefix ui ci
-          npx --prefix ui playwright install --with-deps chromium
       - name: Security gate
         run: |
           python -m bandit -q -r src -lll
           python -m pip_audit --local --skip-editable
-          npm --prefix ui audit --audit-level=critical
-          python scripts/scan_tracked_secrets.py --repo-root .
+          python scripts/scan_tracked_secrets.py --repo-root . --include-untracked
       - name: Lint
-        run: python -m ruff check src tests
+        run: python -m ruff check src tests scripts
+      - name: Documentation links
+        run: python scripts/check_markdown_links.py
       - name: Type-check
         run: |
           python -m mypy src
           python -m mypy --strict src/wazuh_sysmon_triage/pipeline
       - name: Dead-code gate
-        run: |
-          python -m vulture src tests --min-confidence 80
-          npx --yes knip --directory ui --no-progress
+        run: python -m vulture src tests --min-confidence 80
       - name: Python test+cov
         env:
           PYTHONPATH: ./src
@@ -52,13 +53,26 @@ jobs:
           --cov-report=term-missing
           --cov-fail-under=80
           --ignore=tests/test_golden_snapshots.py
-      - name: UI test
-        run: |
-          npm --prefix ui run test -- --run
-          npm --prefix ui run test:e2e:smoke
-      - name: UI build
-        run: npm --prefix ui run build
       - name: Snapshot test
         env:
           PYTHONPATH: ./src
         run: python -m pytest -q tests/test_golden_snapshots.py
+      - name: Build and validate distributions
+        run: |
+          python -m build
+          python -m twine check dist/*
+      - name: Bounded 10k performance gate
+        run: >
+          python scripts/benchmark_offline.py
+          --source-events 10000
+          --selected-events 10000
+          --repeat 2
+          --max-seconds 30
+          --max-rss-mib 512
+          --report benchmark-report-10k.json
+      - name: Retain 10k benchmark report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-report-10k
+          path: benchmark-report-10k.json

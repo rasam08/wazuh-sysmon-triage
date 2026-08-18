@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import logging
 import os
@@ -13,7 +13,6 @@ from wazuh_sysmon_triage.cli_helpers import (
     _emit_dry_run,
     _ensure_out_dir,
     _generate_case_id,
-    _normalize_alert_queues,
     _print_alert_explanations,
     _print_alert_list,
     _print_stats_summary,
@@ -34,7 +33,7 @@ from wazuh_sysmon_triage.cli_helpers import (
 )
 from wazuh_sysmon_triage.logging import setup_logging
 from wazuh_sysmon_triage.operations import apply_artifact_retention, record_run_telemetry
-from wazuh_sysmon_triage.pipeline.fetch import build_sysmon_query
+from wazuh_sysmon_triage.pipeline.fetch import DEFAULT_EVENT_IDS, build_sysmon_query
 from wazuh_sysmon_triage.runtime import RunContext
 from wazuh_sysmon_triage.sanitize import OutputSanitizer
 
@@ -64,13 +63,12 @@ def _execute_run(
     max_events: int,
     max_pages: int,
     fail_on_truncation: bool,
+    fail_on_input_errors: bool,
+    max_record_bytes: int,
     print_stats: bool | None,
     case_id: str | None,
     input_ndjson: str | None,
-    min_alert_score: int | None,
     allowlist_image: list[str] | None,
-    alert_queues: list[str] | None,
-    include_dev_queue: bool | None,
     alerts_only: bool | None,
     explain: bool,
     explain_alert: str | None,
@@ -79,6 +77,7 @@ def _execute_run(
     dry_run_query: bool,
     default_last_window: str | None,
     config: str | None,
+    investigation_anchor: dict[str, Any] | None = None,
 ) -> None:
     run_ctx = RunContext(case_id=case_id)
     setup_logging(log_level, json_format=log_json, out_path=None)
@@ -96,10 +95,7 @@ def _execute_run(
         verify_tls,
         index_pattern,
         event_id,
-        min_alert_score,
         allowlist_image,
-        alert_queues,
-        include_dev_queue,
         print_stats,
         alerts_only,
     )
@@ -130,19 +126,13 @@ def _execute_run(
     verify_tls = bool(resolved["verify_tls"]) if resolved["verify_tls"] is not None else True
     index_pattern = resolved["index_pattern"] or "wazuh-alerts-4.x-*"
     event_ids = resolved.get("event_ids")
-    min_alert_score = (
-        int(resolved["min_alert_score"]) if resolved.get("min_alert_score") is not None else 70
-    )
     print_stats = bool(resolved.get("print_stats"))
     alerts_only = bool(resolved.get("alerts_only"))
     allowlist_basenames = resolved.get("alert_allowlist_basenames")
-    destination_scoring_mode = resolved.get("destination_scoring_mode") or "balanced"
     suppressions = resolved.get("suppressions") or {}
     suppression_rules = suppressions.get("rules") or []
     allowlist_override_rules = suppressions.get("allowlist_override") or []
     context_roles = resolved.get("context_roles") or {}
-    configured_alert_queues = _normalize_alert_queues(resolved.get("alert_queues"))
-    include_dev_queue = bool(resolved.get("include_dev_queue"))
     if explain_alert:
         explain = True
 
@@ -225,11 +215,7 @@ def _execute_run(
                 "agent_id": agent_id,
                 "agent_name": agent_name,
                 "index_pattern": index_pattern,
-                "event_ids": event_ids or [1, 3, 11],
-                "min_alert_score": min_alert_score,
-                "destination_scoring_mode": destination_scoring_mode,
-                "alert_queues": configured_alert_queues,
-                "include_dev_queue": include_dev_queue,
+                "event_ids": event_ids or list(DEFAULT_EVENT_IDS),
                 "verify_tls": verify_tls,
             },
             sanitizer=sanitizer,
@@ -269,9 +255,14 @@ def _execute_run(
             max_events=max_events,
             max_pages=max_pages,
             fail_on_truncation=fail_on_truncation,
+            out_dir=out_dir,
+            quarantine_drops=quarantine_drops,
+            sanitizer=sanitizer,
+            max_record_bytes=max_record_bytes,
         )
         hits = fetch_stage.hits
         truncation = fetch_stage.truncation
+        input_quality = fetch_stage.input_quality
         fetch_duration_ms = fetch_stage.duration_ms
         stage_durations["fetch"] = fetch_duration_ms
 
@@ -283,6 +274,7 @@ def _execute_run(
             quarantine_drops=quarantine_drops,
             out_dir=out_dir,
             sanitizer=sanitizer,
+            append_quarantine=input_ndjson is not None,
         )
         normalized = normalize_stage.events
         normalize_report = normalize_stage.report
@@ -295,7 +287,6 @@ def _execute_run(
             logger=logger,
             run_ctx=run_ctx,
             events=normalized,
-            destination_scoring_mode=destination_scoring_mode,
         )
         correlation = correlate_stage.correlation
         correlate_duration_ms = correlate_stage.duration_ms
@@ -310,9 +301,6 @@ def _execute_run(
             suppression_rules=suppression_rules,
             allowlist_override_rules=allowlist_override_rules,
             context_roles=context_roles,
-            min_alert_score=min_alert_score,
-            configured_alert_queues=configured_alert_queues,
-            include_dev_queue=include_dev_queue,
         )
         detection_result = detect_stage.detection_result
         alerts = detect_stage.alerts
@@ -333,6 +321,8 @@ def _execute_run(
             truncation=truncation,
             out_dir=out_dir,
             sanitizer=sanitizer,
+            investigation_anchor=investigation_anchor,
+            input_quality=input_quality,
         )
         stage_durations["render"] = render_duration_ms
 
@@ -349,8 +339,6 @@ def _execute_run(
             normalized=normalized,
             correlation=correlation,
             detection_result=detection_result,
-            configured_alert_queues=configured_alert_queues,
-            include_dev_queue=include_dev_queue,
             truncation=truncation,
             normalize_report=normalize_report,
             fetch_duration_ms=fetch_duration_ms,
@@ -360,6 +348,7 @@ def _execute_run(
             render_duration_ms=render_duration_ms,
             total_duration_ms=total_duration_ms,
             sanitizer=sanitizer,
+            input_quality=input_quality,
         )
 
         _write_run_metadata(
@@ -379,11 +368,8 @@ def _execute_run(
                 alerts_count=len(alerts),
                 pivot_bundle_count=len(pivot_bundles),
                 detection_result=detection_result,
-                destination_scoring_mode=destination_scoring_mode,
                 suppression_rules=suppression_rules,
                 allowlist_override_rules=allowlist_override_rules,
-                configured_alert_queues=configured_alert_queues,
-                include_dev_queue=include_dev_queue,
                 verify_tls=verify_tls,
                 retention_result=retention_result,
                 normalize_report=normalize_report,
@@ -395,6 +381,9 @@ def _execute_run(
                 render_duration_ms=render_duration_ms,
                 total_duration_ms=total_duration_ms,
                 query_body=query_body,
+                investigation_anchor=investigation_anchor,
+                input_quality=input_quality,
+                fail_on_input_errors=fail_on_input_errors,
             ),
             sanitizer=sanitizer,
         )
@@ -406,16 +395,14 @@ def _execute_run(
                 normalize_report=normalize_report,
                 correlation=correlation,
                 alerts_count=len(alerts),
-                configured_alert_queues=configured_alert_queues,
-                include_dev_queue=include_dev_queue,
                 suppressed_alerts=detection_result.suppressed_alerts,
                 total_duration_ms=total_duration_ms,
+                input_quality=input_quality,
             )
 
         if alerts_only:
             _print_alert_list(
                 alerts=alerts,
-                min_alert_score=min_alert_score,
                 sanitizer=sanitizer,
             )
 
@@ -425,6 +412,16 @@ def _execute_run(
                 explain_alert=explain_alert,
                 sanitizer=sanitizer,
             )
+
+        if (
+            fail_on_input_errors
+            and input_quality is not None
+            and input_quality.rejected_records > 0
+        ):
+            typer.echo(
+                "Input errors were isolated and artifacts were written; strict input mode is failing the run."
+            )
+            raise typer.Exit(code=5)
 
         success = True
         typer.echo("Run complete")
@@ -476,6 +473,4 @@ def _execute_run(
             )
 
 
-
 __all__ = ["_execute_run"]
-

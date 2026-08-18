@@ -5,10 +5,9 @@ PYTHONPATH ?= ./src
 
 test:
 	PYTHONPATH=$(PYTHONPATH) $(PYTHON) -m pytest -q
-	npm --prefix ui run test -- --run
 
 build:
-	npm --prefix ui run build
+	$(PYTHON) -m build
 
 smoke-live:
 	PYTHONPATH=$(PYTHONPATH) $(PYTHON) -m wazuh_sysmon_triage live --dry-run-query --profile soc --agent-name anon --last 2h --case-id make-smoke-live --out-dir ./out

@@ -9,7 +9,7 @@ import sys
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
-DEFAULT_EXCLUDE_REGEX = r"(^ui/node_modules/|^\.git/)"
+DEFAULT_EXCLUDE_REGEX = r"(^\.git/)"
 DEFAULT_CHUNK_SIZE = 200
 
 
@@ -38,6 +38,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional path to write merged detect-secrets JSON payload.",
     )
+    parser.add_argument(
+        "--include-untracked",
+        action="store_true",
+        help="Also scan untracked files that are not ignored by Git.",
+    )
     return parser.parse_args()
 
 
@@ -46,9 +51,12 @@ def batched(items: Sequence[str], size: int) -> Iterable[Sequence[str]]:
         yield items[index : index + size]
 
 
-def list_tracked_files(repo_root: Path) -> list[str]:
+def list_repository_files(repo_root: Path, *, include_untracked: bool) -> list[str]:
+    command = ["git", "ls-files", "-z"]
+    if include_untracked:
+        command = ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"]
     result = subprocess.run(
-        ["git", "ls-files", "-z"],
+        command,
         cwd=repo_root,
         check=True,
         capture_output=True,
@@ -75,6 +83,8 @@ def scan_chunk(repo_root: Path, chunk: Sequence[str], exclude_regex: str) -> dic
         sys.executable,
         "-m",
         "detect_secrets",
+        "--cores",
+        "1",
         "scan",
         "--exclude-files",
         exclude_regex,
@@ -145,8 +155,11 @@ def main() -> int:
         return 2
 
     repo_root = Path(args.repo_root).resolve()
-    tracked_files = list_tracked_files(repo_root)
-    scan_files = filter_files(tracked_files, args.exclude_regex)
+    repository_files = list_repository_files(
+        repo_root,
+        include_untracked=args.include_untracked,
+    )
+    scan_files = filter_files(repository_files, args.exclude_regex)
 
     payloads: list[dict[str, object]] = []
     for chunk in batched(scan_files, args.chunk_size):

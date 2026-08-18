@@ -6,9 +6,12 @@ from typing import Literal, TypedDict
 
 from wazuh_sysmon_triage.models.alerts import Alert
 from wazuh_sysmon_triage.models.sysmon import (
+    DnsQueryEvent,
     FileCreateEvent,
     NetworkConnectEvent,
+    ProcessAccessEvent,
     ProcessCreateEvent,
+    RegistryEvent,
 )
 
 DEFAULT_ALLOWLIST_BASENAMES = {
@@ -45,9 +48,6 @@ ADVANCED_INJECTION_RE = re.compile(
     r"definedynamicassembly|definepinvokemethod|reflection\.emit|pidgenx\.dll|pkeyhelper\.dll",
     flags=re.IGNORECASE,
 )
-POLICY_BYPASS_RE = re.compile(r"-noprofile|-nop|-executionpolicy\s+bypass", flags=re.IGNORECASE)
-
-MICROSOFT_IP_PREFIXES = ("13.", "20.", "40.", "52.", "104.", "131.107.", "150.171.")
 SCRIPT_EXTENSIONS = (".ps1", ".bat", ".cmd", ".vbs", ".js", ".exe", ".dll")
 TEMP_MARKERS = ("\\temp\\", "\\appdata\\local\\temp\\")
 USER_WRITABLE_MARKERS = (
@@ -72,15 +72,17 @@ BURST_SUSPICIOUS_BASENAMES = {
 }
 
 AlertCategory = Literal[
-    "malware_execution",
-    "c2_outbound",
-    "persistence",
-    "policy_violation",
+    "process_behavior",
+    "network_behavior",
+    "persistence_behavior",
+    "credential_access_behavior",
+    "remote_activity_behavior",
+    "policy_pattern",
     "developer_tooling",
+    "aggregate_behavior",
     "unknown",
 ]
-AlertQueue = Literal["soc_malware", "soc_policy", "soc_dev", "soc_info"]
-AlertConfidence = Literal["low", "medium", "high"]
+ProcessKey = tuple[str, str]
 
 
 class RuleMetadata(TypedDict):
@@ -100,14 +102,14 @@ RULE_METADATA: dict[str, RuleMetadata] = {
         "rule_name": "PowerShell Policy Bypass Pattern",
         "primary_event_id": 1,
     },
-    "powershell_obfuscation": {
+    "powershell_encoded_or_download_pattern": {
         "rule_id": "BATCAVE-PS-001",
-        "rule_name": "PowerShell Obfuscation / Download",
+        "rule_name": "PowerShell Encoded or Download Pattern",
         "primary_event_id": 1,
     },
-    "powershell_advanced_injection": {
+    "powershell_reflection_or_native_api_pattern": {
         "rule_id": "BATCAVE-PS-ADV-001",
-        "rule_name": "PowerShell Advanced Injection",
+        "rule_name": "PowerShell Reflection or Native API Pattern",
         "primary_event_id": 1,
     },
     "lolbin_outbound": {
@@ -115,30 +117,45 @@ RULE_METADATA: dict[str, RuleMetadata] = {
         "rule_name": "LOLBins Outbound",
         "primary_event_id": 3,
     },
-    "suspicious_path_outbound": {
+    "user_writable_path_outbound": {
         "rule_id": "BATCAVE-NET-002",
-        "rule_name": "Suspicious Path Outbound",
+        "rule_name": "User-writable Path Outbound",
         "primary_event_id": 3,
     },
-    "persistence_schtasks_create": {
+    "scheduled_task_create": {
         "rule_id": "BATCAVE-PERSIST-001",
-        "rule_name": "Persistence via schtasks /Create",
+        "rule_name": "Scheduled Task Creation",
         "primary_event_id": 1,
     },
-    "beacon_like_outbound": {
+    "periodic_outbound_pattern": {
         "rule_id": "BATCAVE-NET-003",
-        "rule_name": "Beacon-like Outbound Pattern",
+        "rule_name": "Periodic Outbound Pattern",
         "primary_event_id": 3,
     },
-    "burst_suspicious_processes": {
+    "process_launch_burst": {
         "rule_id": "BATCAVE-BEHAV-001",
-        "rule_name": "Burst Suspicious Process Fan-out",
+        "rule_name": "Process Launch Burst",
         "primary_event_id": 1,
     },
-    "executive_hot_host": {
-        "rule_id": "BATCAVE-META-001",
-        "rule_name": "Executive Hot Host Risk Accumulation",
-        "primary_event_id": 1,
+    "registry_persistence_location_modified": {
+        "rule_id": "BATCAVE-PERSIST-REG-001",
+        "rule_name": "Registry Persistence Location Modified",
+        "primary_event_id": 13,
+    },
+    "lsass_process_access": {
+        "rule_id": "BATCAVE-CRED-001",
+        "rule_name": "LSASS Process Access",
+        "primary_event_id": 10,
+    },
+    "remote_logon_followed_by_service_install": {
+        "rule_id": "BATCAVE-REMOTE-001",
+        "rule_name": "Remote Logon Followed by Service Installation",
+        "primary_event_id": 4697,
+    },
+    "remote_logon_followed_by_scheduled_task": {
+        "rule_id": "BATCAVE-REMOTE-002",
+        "rule_name": "Remote Logon Followed by Scheduled Task Creation",
+        "primary_event_id": 4698,
     },
 }
 
@@ -153,8 +170,10 @@ class DetectionRunResult:
 
 @dataclass(frozen=True)
 class DetectionContexts:
-    process_creates: dict[str, list[ProcessCreateEvent]]
-    network_by_guid: dict[str, list[NetworkConnectEvent]]
-    files_by_guid: dict[str, list[FileCreateEvent]]
-    children_by_parent: dict[str, list[ProcessCreateEvent]]
-
+    process_creates: dict[ProcessKey, list[ProcessCreateEvent]]
+    network_by_process: dict[ProcessKey, list[NetworkConnectEvent]]
+    files_by_process: dict[ProcessKey, list[FileCreateEvent]]
+    registry_by_process: dict[ProcessKey, list[RegistryEvent]]
+    dns_by_process: dict[ProcessKey, list[DnsQueryEvent]]
+    process_access_by_source: dict[ProcessKey, list[ProcessAccessEvent]]
+    children_by_parent: dict[ProcessKey, list[ProcessCreateEvent]]

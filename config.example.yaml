@@ -1,6 +1,6 @@
-# config.example.yaml
-# rename this file to `config.local.yaml` and update the values as needed for your environment. Do NOT commit sensitive information to version control. Use environment variables or other secure methods to handle secrets in production environments.
-# Example configuration for the wazuh-sysmon-triage tool
+# Example configuration for wazuh-sysmon-triage.
+# Copy this file to `config.local.yaml`, then keep secrets in environment variables or
+# a secret manager. Never commit credentials or real evidence to this repository.
 
 ## Time window
 ## - You may set `start`/`end` here OR provide them on the CLI.
@@ -16,9 +16,9 @@ agent_name: "MyAgentName"
 out_dir: "./out"
 
 ## OpenSearch / Wazuh Indexer API endpoint
-## Note: Wazuh Dashboards/UI is typically :443; Indexer API is often :9920.
-host: "https://indexer:9920"
-user: "admin"
+## Wazuh Indexer uses 9200/TCP by default. This is not the Dashboard on 443/TCP.
+host: "https://indexer:9200"
+user: "triage-readonly"
 verify_tls: true
 # Credentials policy:
 # - Do not store passwords in config files.
@@ -27,13 +27,12 @@ verify_tls: true
 ## Index selection
 index_pattern: "wazuh-alerts-4.x-*"
 
-## Supported Sysmon Event IDs
-event_ids: [1, 3, 11]
+## Supported high-value Windows Event IDs.
+## Security 4624 is query-filtered to logon types 3 and 10.
+event_ids: [1, 3, 5, 10, 11, 12, 13, 14, 22, 23, 26, 4624, 4697, 4698]
 
-## BATCAVE ALERTS tuning
-## CLI overrides config when provided.
-min_alert_score: 70
-destination_scoring_mode: balanced # strict|balanced|lab
+## Local behavior-rule suppression
+## CLI allowlist values override config when provided.
 alert_allowlist_basenames:
   - MsMpEng.exe
   - MpCmdRun.exe
@@ -62,11 +61,6 @@ context_roles:
     users: ["HOST\\alice", "HOST\\bob"]
     process_image_contains: ["\\.vscode\\", "powershelleditorservices"]
 
-## Queue filter defaults for emitted alerts
-## soc profile normally uses malware+policy and excludes soc_dev unless explicitly enabled
-alert_queues: [soc_malware, soc_policy]
-include_dev_queue: false
-
 ## Optional retention policy for auto-pruning old case folders under out_dir
 artifact_retention:
   enabled: true
@@ -79,25 +73,17 @@ active_profile: soc
 profiles:
   soc:
     agent_name: anon
-    event_ids: [1, 3, 11]
-    min_alert_score: 70
+    event_ids: [1, 3, 5, 10, 11, 12, 13, 14, 22, 23, 26, 4624, 4697, 4698]
     alerts_only: true
     print_stats: true
-    destination_scoring_mode: balanced
-    alert_queues: [soc_malware, soc_policy]
-    include_dev_queue: false
   dev:
-    event_ids: [1, 3, 11]
-    min_alert_score: 70
+    event_ids: [1, 3, 5, 10, 11, 12, 13, 14, 22, 23, 26, 4624, 4697, 4698]
     alerts_only: false
     print_stats: true
-    destination_scoring_mode: balanced
   lab:
-    event_ids: [1, 3, 11]
-    min_alert_score: 60
+    event_ids: [1, 3, 5, 10, 11, 12, 13, 14, 22, 23, 26, 4624, 4697, 4698]
     alerts_only: true
     print_stats: true
-    destination_scoring_mode: lab
 
 # You can also omit host/user here and set these environment variables:
 #   WAZUH_OS_HOST, WAZUH_OS_USER, WAZUH_OS_PASSWORD, WAZUH_OS_VERIFY_TLS
@@ -113,6 +99,6 @@ profiles:
 #
 # If you are using an SSH tunnel to reach a localhost-bound indexer:
 #
-#   ssh -N -L 9920:localhost:9920 <user>@<wazuh-server>
+#   ssh -N -L 9920:localhost:9200 <user>@<wazuh-indexer>
 #   $env:WAZUH_OS_HOST = "https://127.0.0.1:9920"
 #   triage live --no-verify-tls --config config.example.yaml --last 2h --case-id INCIDENT-TUNNEL-EXAMPLE-001

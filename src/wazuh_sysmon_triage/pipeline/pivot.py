@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import fnmatch
-import os
 import re
 from collections import defaultdict
 from datetime import timedelta
@@ -9,17 +8,27 @@ from typing import Any
 
 from wazuh_sysmon_triage.models.alerts import Alert
 from wazuh_sysmon_triage.models.sysmon import (
+    DnsQueryEvent,
     FileCreateEvent,
+    FileDeleteEvent,
     NetworkConnectEvent,
+    ProcessAccessEvent,
     ProcessCreateEvent,
+    ProcessTerminateEvent,
+    RegistryEvent,
+    RemoteLogonEvent,
+    ScheduledTaskCreatedEvent,
+    ServiceInstallEvent,
     SysmonEvent,
 )
 from wazuh_sysmon_triage.output_schema import OUTPUT_SCHEMA_VERSION
 from wazuh_sysmon_triage.pipeline.network_utils import destination_class
+from wazuh_sysmon_triage.windows_paths import windows_basename
 
 
 def _event_fingerprint(event: SysmonEvent) -> tuple[Any, ...]:
     return (
+        event.host_key,
         event.event_id,
         event.timestamp,
         getattr(event, "process_guid", ""),
@@ -28,6 +37,15 @@ def _event_fingerprint(event: SysmonEvent) -> tuple[Any, ...]:
         getattr(event, "destination_ip", ""),
         getattr(event, "destination_port", None),
         getattr(event, "target_filename", ""),
+        getattr(event, "target_object", ""),
+        getattr(event, "query_name", ""),
+        getattr(event, "target_process_guid", ""),
+        getattr(event, "granted_access", ""),
+        getattr(event, "target_logon_id", ""),
+        getattr(event, "subject_logon_id", ""),
+        getattr(event, "service_name", ""),
+        getattr(event, "task_name", ""),
+        getattr(event, "event_type", ""),
     )
 
 
@@ -83,9 +101,7 @@ def _destination_class(value: str | None) -> str | None:
 
 
 def _basename(path: str | None) -> str:
-    if not path:
-        return ""
-    return os.path.basename(path).lower()
+    return windows_basename(path)
 
 
 def _suppression_summary(
@@ -160,14 +176,15 @@ def build_pivot_bundles(
     allowlist_basenames: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     process_events = [event for event in events if isinstance(event, ProcessCreateEvent)]
-    by_guid: dict[str, list[ProcessCreateEvent]] = defaultdict(list)
-    children_by_parent: dict[str, list[ProcessCreateEvent]] = defaultdict(list)
+    by_process: dict[tuple[str, str], list[ProcessCreateEvent]] = defaultdict(list)
+    children_by_parent: dict[tuple[str, str], list[ProcessCreateEvent]] = defaultdict(list)
     for event in process_events:
-        by_guid[event.process_guid].append(event)
+        host_key = event.host_key or "unknown:constructed"
+        by_process[(host_key, event.process_guid)].append(event)
         if event.parent_process_guid:
-            children_by_parent[event.parent_process_guid].append(event)
+            children_by_parent[(host_key, event.parent_process_guid)].append(event)
 
-    for rows in by_guid.values():
+    for rows in by_process.values():
         rows.sort(key=lambda row: row.timestamp)
     for rows in children_by_parent.values():
         rows.sort(key=lambda row: row.timestamp)
@@ -176,13 +193,12 @@ def build_pivot_bundles(
     suppression_rules = suppression_rules or []
     allowlist_override = allowlist_override or []
     normalized_allowlist = {
-        _basename(value)
-        for value in (allowlist_basenames or [])
-        if _basename(value)
+        _basename(value) for value in (allowlist_basenames or []) if _basename(value)
     }
 
     for alert in alerts:
-        process_rows = by_guid.get(alert.process_guid, [])
+        process_key = (alert.host_key, alert.process_guid)
+        process_rows = by_process.get(process_key, []) if alert.process_guid else []
         anchor: SysmonEvent | None = None
         if process_rows:
             if alert.primary_event_id == 1:
@@ -190,18 +206,31 @@ def build_pivot_bundles(
                     process_rows,
                     key=lambda row: abs((row.timestamp - alert.utc_time).total_seconds()),
                 )
-        if not anchor:
+        if not anchor and alert.process_guid:
             candidates = [
                 event
                 for event in events
-                if getattr(event, "process_guid", None) == alert.process_guid
-                and (
-                    alert.primary_event_id is None
-                    or event.event_id == alert.primary_event_id
-                )
+                if (event.host_key or "unknown:constructed") == alert.host_key
+                and getattr(event, "process_guid", None) == alert.process_guid
+                and (alert.primary_event_id is None or event.event_id == alert.primary_event_id)
             ]
             if candidates:
-                anchor = min(candidates, key=lambda row: abs((row.timestamp - alert.utc_time).total_seconds()))
+                anchor = min(
+                    candidates,
+                    key=lambda row: abs((row.timestamp - alert.utc_time).total_seconds()),
+                )
+        if not anchor and not alert.process_guid:
+            candidates = [
+                event
+                for event in events
+                if (event.host_key or "unknown:constructed") == alert.host_key
+                and (alert.primary_event_id is None or event.event_id == alert.primary_event_id)
+            ]
+            if candidates:
+                anchor = min(
+                    candidates,
+                    key=lambda row: abs((row.timestamp - alert.utc_time).total_seconds()),
+                )
         if not anchor:
             continue
 
@@ -209,7 +238,12 @@ def build_pivot_bundles(
         current = anchor if isinstance(anchor, ProcessCreateEvent) else None
         depth = 0
         while current and current.parent_process_guid and depth < max_ancestry_depth:
-            parent_rows = by_guid.get(current.parent_process_guid) or []
+            parent_rows = (
+                by_process.get(
+                    (current.host_key or "unknown:constructed", current.parent_process_guid)
+                )
+                or []
+            )
             if not parent_rows:
                 break
             parent = parent_rows[-1]
@@ -223,19 +257,24 @@ def build_pivot_bundles(
         if isinstance(anchor, ProcessCreateEvent) and anchor.parent_process_guid:
             siblings = [
                 proc
-                for proc in children_by_parent.get(anchor.parent_process_guid, [])
-                if sibling_start <= proc.timestamp <= sibling_end and proc.process_guid != anchor.process_guid
+                for proc in children_by_parent.get(
+                    (anchor.host_key or "unknown:constructed", anchor.parent_process_guid),
+                    [],
+                )
+                if sibling_start <= proc.timestamp <= sibling_end
+                and proc.process_guid != anchor.process_guid
             ]
 
-        tree_guids: set[str] = {alert.process_guid}
-        stack = [alert.process_guid]
+        tree_processes: set[tuple[str, str]] = {process_key} if alert.process_guid else set()
+        stack = [process_key] if alert.process_guid else []
         while stack:
-            guid = stack.pop()
-            for child in children_by_parent.get(guid, []):
-                if child.process_guid in tree_guids:
+            parent_key = stack.pop()
+            for child in children_by_parent.get(parent_key, []):
+                child_key = (child.host_key or "unknown:constructed", child.process_guid)
+                if child_key in tree_processes:
                     continue
-                tree_guids.add(child.process_guid)
-                stack.append(child.process_guid)
+                tree_processes.add(child_key)
+                stack.append(child_key)
 
         net_start = anchor.timestamp - timedelta(minutes=5)
         net_end = anchor.timestamp + timedelta(minutes=5)
@@ -243,24 +282,100 @@ def build_pivot_bundles(
         files = [
             event
             for event in events
-            if isinstance(event, FileCreateEvent) and event.process_guid in tree_guids
+            if isinstance(event, FileCreateEvent)
+            and (event.host_key or "unknown:constructed", event.process_guid) in tree_processes
+            and net_start <= event.timestamp <= net_end
+        ]
+        file_deletions = [
+            event
+            for event in events
+            if isinstance(event, FileDeleteEvent)
+            and (event.host_key or "unknown:constructed", event.process_guid) in tree_processes
+            and net_start <= event.timestamp <= net_end
         ]
         network = [
             event
             for event in events
             if isinstance(event, NetworkConnectEvent)
-            and event.process_guid in tree_guids
+            and (event.host_key or "unknown:constructed", event.process_guid) in tree_processes
             and net_start <= event.timestamp <= net_end
+        ]
+        registry = [
+            event
+            for event in events
+            if isinstance(event, RegistryEvent)
+            and (event.host_key or "unknown:constructed", event.process_guid) in tree_processes
+            and net_start <= event.timestamp <= net_end
+        ]
+        dns = [
+            event
+            for event in events
+            if isinstance(event, DnsQueryEvent)
+            and (event.host_key or "unknown:constructed", event.process_guid) in tree_processes
+            and net_start <= event.timestamp <= net_end
+        ]
+        process_access = [
+            event
+            for event in events
+            if isinstance(event, ProcessAccessEvent)
+            and (event.host_key or "unknown:constructed", event.process_guid) in tree_processes
+            and net_start <= event.timestamp <= net_end
+        ]
+        process_terminations = [
+            event
+            for event in events
+            if isinstance(event, ProcessTerminateEvent)
+            and (event.host_key or "unknown:constructed", event.process_guid) in tree_processes
+            and net_start <= event.timestamp <= net_end
+        ]
+        native_start = anchor.timestamp - timedelta(minutes=15)
+        native_end = anchor.timestamp + timedelta(minutes=2)
+        authentication = [
+            event
+            for event in events
+            if isinstance(event, RemoteLogonEvent)
+            and (event.host_key or "unknown:constructed") == alert.host_key
+            and native_start <= event.timestamp <= native_end
+        ]
+        service_installs = [
+            event
+            for event in events
+            if isinstance(event, ServiceInstallEvent)
+            and (event.host_key or "unknown:constructed") == alert.host_key
+            and native_start <= event.timestamp <= native_end
+        ]
+        scheduled_tasks = [
+            event
+            for event in events
+            if isinstance(event, ScheduledTaskCreatedEvent)
+            and (event.host_key or "unknown:constructed") == alert.host_key
+            and native_start <= event.timestamp <= native_end
         ]
         related_processes = [
             event
             for event in process_events
-            if event.process_guid in tree_guids and event.process_guid != alert.process_guid
+            if (event.host_key or "unknown:constructed", event.process_guid) in tree_processes
+            and (event.host_key or "unknown:constructed", event.process_guid) != process_key
         ]
 
         all_related: list[SysmonEvent] = []
         seen: set[tuple[Any, ...]] = set()
-        for row in [anchor, *ancestry, *siblings, *related_processes, *files, *network]:
+        for row in [
+            anchor,
+            *ancestry,
+            *siblings,
+            *related_processes,
+            *files,
+            *file_deletions,
+            *network,
+            *registry,
+            *dns,
+            *process_access,
+            *process_terminations,
+            *authentication,
+            *service_installs,
+            *scheduled_tasks,
+        ]:
             fp = _event_fingerprint(row)
             if fp in seen:
                 continue
@@ -282,12 +397,19 @@ def build_pivot_bundles(
                 "alert_id": alert.alert_id,
                 "rule_id": alert.rule_id,
                 "rule_name": alert.rule_name,
-                "score": alert.score,
                 "alert_type": alert.alert_type,
+                "category": alert.category,
+                "finding_kind": alert.finding_kind,
+                "evidence_strength": alert.evidence_strength.value,
                 "primary_event_id": alert.primary_event_id,
                 "utc_time": alert.utc_time.isoformat().replace("+00:00", "Z"),
+                "host_key": alert.host_key,
                 "process_guid": alert.process_guid,
+                "source_host_key": alert.source_host_key,
+                "source_ip": alert.source_ip,
+                "source_port": alert.source_port,
                 "reason": alert.reason,
+                "evidence_refs": [ref.model_dump(mode="json") for ref in alert.evidence_refs],
             },
             "anchor_event": _serialize_event(anchor),
             "pivot_window": {
@@ -306,13 +428,31 @@ def build_pivot_bundles(
                 "siblings": len(siblings),
                 "related_processes": len(related_processes),
                 "file_artifacts": len(files),
+                "file_deletions": len(file_deletions),
                 "network_connections": len(network),
+                "registry_events": len(registry),
+                "dns_queries": len(dns),
+                "process_access_events": len(process_access),
+                "process_terminations": len(process_terminations),
+                "authentication_events": len(authentication),
+                "service_installs": len(service_installs),
+                "scheduled_task_creations": len(scheduled_tasks),
             },
             "process_ancestry": [_serialize_event(event) for event in ancestry],
             "sibling_spawns": [_serialize_event(event) for event in siblings],
             "related_processes": [_serialize_event(event) for event in related_processes],
             "file_artifacts": [_serialize_event(event) for event in files],
+            "file_deletions": [_serialize_event(event) for event in file_deletions],
             "network_connections": [_serialize_event(event) for event in network],
+            "registry_activity": [_serialize_event(event) for event in registry],
+            "dns_activity": [_serialize_event(event) for event in dns],
+            "process_access_activity": [_serialize_event(event) for event in process_access],
+            "process_terminations": [_serialize_event(event) for event in process_terminations],
+            "authentication_activity": [_serialize_event(event) for event in authentication],
+            "service_install_activity": [
+                _serialize_event(event) for event in service_installs
+            ],
+            "scheduled_task_activity": [_serialize_event(event) for event in scheduled_tasks],
             "suppression_context": {
                 "suppressed_related_event_count": suppressed_count,
                 "matched_rules": suppressed_rules,

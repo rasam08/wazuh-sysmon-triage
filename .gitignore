@@ -18,6 +18,9 @@ dist/
 .coverage
 htmlcov/
 .coverage.*
+coverage.xml
+.nox/
+.tox/
 
 # Linters/type-checkers
 .ruff_cache/
@@ -25,18 +28,24 @@ htmlcov/
 
 # Editors/OS
 .vscode/
+.idea/
 .DS_Store
+Thumbs.db
 
 # Project outputs
 out/
 output/
 out_*/
-ui/playwright-report/
-ui/test-results/
-ui/node_modules/
-ui/ui/.tmp-*/
 .tmp_release_gate_out/
 tmp-out/
+benchmark-report*.json
+benchmark-scaling-report.json
+samples/acceptance/noisy_workstation/raw_hits.ndjson
+
+# Local environment files (the documented template remains tracked)
+.env
+.env.*
+!.env.example
 
 # Local config (may contain credentials)
 config.local.yaml

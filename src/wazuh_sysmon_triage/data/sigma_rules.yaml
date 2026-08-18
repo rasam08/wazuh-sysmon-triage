@@ -1,7 +1,0 @@
-powershell_encoded_command:
-  match:
-    image: powershell.exe
-    commandline_contains: "-enc"
-  tags:
-    - attack.t1059
-    - suspicious.encoding

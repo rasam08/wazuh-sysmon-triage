@@ -5,21 +5,29 @@ from collections.abc import Iterable
 from typing import Any
 
 from wazuh_sysmon_triage.models.alerts import Alert
-from wazuh_sysmon_triage.models.sysmon import NetworkConnectEvent, ProcessCreateEvent, SysmonEvent
+from wazuh_sysmon_triage.models.sysmon import (
+    NetworkConnectEvent,
+    ProcessAccessEvent,
+    ProcessCreateEvent,
+    RegistryEvent,
+    SysmonEvent,
+)
 
 from .detect_contexts import _build_detection_contexts, _find_process_create, _role_tags_for_event
-from .detect_detectors_behavior import _detect_burst_spread, _detect_hot_host_meta_alerts
+from .detect_detectors_behavior import _detect_process_launch_burst
+from .detect_detectors_endpoint import _detect_lsass_access, _detect_registry_persistence
 from .detect_detectors_network import (
-    _detect_beacon_like_outbound,
     _detect_lolbin_outbound,
-    _detect_suspicious_path_outbound,
+    _detect_periodic_outbound,
+    _detect_user_writable_path_outbound,
 )
 from .detect_detectors_process import _detect_powershell, _detect_schtasks
+from .detect_detectors_remote import _detect_remote_activity
 from .detect_types import *  # noqa: F401,F403
 from .detect_types import DetectionContexts, DetectionRunResult
 from .detect_utils import *  # noqa: F401,F403
 from .detect_utils import (
-    _apply_role_tags_and_routing,
+    _apply_role_tags,
     _basename,
     _event_key,
     _event_user,
@@ -28,6 +36,7 @@ from .detect_utils import (
     normalize_allowlist_basenames,
     sort_alerts,
 )
+from .remote_activity import correlate_remote_activity
 
 
 def _collect_process_alerts(
@@ -41,16 +50,22 @@ def _collect_process_alerts(
         _detect_powershell(
             event,
             role_tags=role_tags,
-            networks=contexts.network_by_guid.get(event.process_guid, []),
-            files=contexts.files_by_guid.get(event.process_guid, []),
-            children=contexts.children_by_parent.get(event.process_guid, []),
-            network_context_by_guid=contexts.network_by_guid,
+            networks=contexts.network_by_process.get(
+                (event.host_key or "unknown:constructed", event.process_guid), []
+            ),
+            files=contexts.files_by_process.get(
+                (event.host_key or "unknown:constructed", event.process_guid), []
+            ),
+            children=contexts.children_by_parent.get(
+                (event.host_key or "unknown:constructed", event.process_guid), []
+            ),
+            network_context_by_process=contexts.network_by_process,
         )
     )
 
     schtasks_alert = _detect_schtasks(event)
     if schtasks_alert:
-        event_alerts.append(_apply_role_tags_and_routing(schtasks_alert, role_tags))
+        event_alerts.append(_apply_role_tags(schtasks_alert, role_tags))
 
     return event_alerts, event
 
@@ -64,17 +79,18 @@ def _collect_network_alerts(
     event_alerts: list[Alert] = []
     process_create = _find_process_create(
         contexts.process_creates,
+        event.host_key or "unknown:constructed",
         event.process_guid,
         event.timestamp,
     )
 
     lolbin_alert = _detect_lolbin_outbound(event, process_create)
     if lolbin_alert:
-        event_alerts.append(_apply_role_tags_and_routing(lolbin_alert, role_tags))
+        event_alerts.append(_apply_role_tags(lolbin_alert, role_tags))
 
-    path_alert = _detect_suspicious_path_outbound(event, process_create)
+    path_alert = _detect_user_writable_path_outbound(event, process_create)
     if path_alert:
-        event_alerts.append(_apply_role_tags_and_routing(path_alert, role_tags))
+        event_alerts.append(_apply_role_tags(path_alert, role_tags))
 
     return event_alerts, process_create
 
@@ -90,6 +106,24 @@ def _collect_event_alerts(
         return _collect_process_alerts(event, role_tags=role_tags, contexts=contexts)
     if isinstance(event, NetworkConnectEvent):
         return _collect_network_alerts(event, role_tags=role_tags, contexts=contexts)
+    if isinstance(event, RegistryEvent):
+        process_create = _find_process_create(
+            contexts.process_creates,
+            event.host_key or "unknown:constructed",
+            event.process_guid,
+            event.timestamp,
+        )
+        alert = _detect_registry_persistence(event, process_create)
+        return ([_apply_role_tags(alert, role_tags)] if alert else []), process_create
+    if isinstance(event, ProcessAccessEvent):
+        process_create = _find_process_create(
+            contexts.process_creates,
+            event.host_key or "unknown:constructed",
+            event.process_guid,
+            event.timestamp,
+        )
+        alert = _detect_lsass_access(event, process_create)
+        return ([_apply_role_tags(alert, role_tags)] if alert else []), process_create
     return [], None
 
 
@@ -186,12 +220,11 @@ def run_detection(
         alerts.extend(event_alerts)
 
     aggregate_alerts: list[Alert] = []
-    aggregate_alerts.extend(_detect_beacon_like_outbound(contexts))
-    aggregate_alerts.extend(_detect_burst_spread(contexts))
+    aggregate_alerts.extend(_detect_periodic_outbound(contexts))
+    aggregate_alerts.extend(_detect_process_launch_burst(contexts))
+    aggregate_alerts.extend(_detect_remote_activity(correlate_remote_activity(event_list)))
     if aggregate_alerts:
         alerts.extend(aggregate_alerts)
-
-    alerts.extend(_detect_hot_host_meta_alerts(alerts, contexts))
 
     return DetectionRunResult(
         alerts=sort_alerts(alerts),
@@ -213,6 +246,6 @@ def detect_alerts(
     ).alerts
 
 
-def filter_alerts(alerts: Iterable[Alert], min_score: int) -> list[Alert]:
-    return [alert for alert in sort_alerts(alerts) if alert.score >= min_score]
-
+def filter_alerts(alerts: Iterable[Alert]) -> list[Alert]:
+    """Return deterministic finding order; numeric risk filtering was removed in schema v2."""
+    return sort_alerts(alerts)

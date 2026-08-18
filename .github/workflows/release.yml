@@ -1,9 +1,16 @@
 name: Release
 
+permissions:
+  contents: read
+
 on:
   push:
     tags:
       - "v*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build-and-release:
@@ -12,47 +19,47 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install build
-          npm --prefix ui ci
+          python -m pip install .
+          python -m pip install build twine pytest
+
+      - name: Verify tag matches package version
+        run: |
+          python - <<'PY'
+          import os
+          from importlib.metadata import version
+
+          tag_version = os.environ["GITHUB_REF_NAME"].removeprefix("v")
+          package_version = version("wazuh-sysmon-triage")
+          if tag_version != package_version:
+              raise SystemExit(
+                  f"tag version {tag_version!r} does not match package version {package_version!r}"
+              )
+          PY
+
+      - name: Test release commit
+        run: python -m pytest -q
 
       - name: Build Python package
-        run: python -m build
-
-      - name: Build UI bundle
-        run: npm --prefix ui run build
-
-      - name: Package UI artifact
         run: |
-          tar -czf ui-dist.tar.gz -C ui dist
+          python -m build
+          python -m twine check dist/*
 
-      - name: Generate release notes
-        run: |
-          cat > release-notes.md <<'EOF'
-          ## Release Notes
-
-          Automated release for tag `${{ github.ref_name }}`.
-
-          Included artifacts:
-          - Python distributions from `dist/`
-          - UI build archive `ui-dist.tar.gz`
-          EOF
+      - name: Generate checksums
+        run: cd dist && sha256sum *.whl *.tar.gz > SHA256SUMS.txt
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          body_path: release-notes.md
+          generate_release_notes: true
           files: |
             dist/*
-            ui-dist.tar.gz

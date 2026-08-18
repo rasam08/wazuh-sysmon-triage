@@ -1,0 +1,29 @@
+schema_version: 1
+scenario: noisy_workstation
+provenance: synthetic
+required_findings:
+- type: powershell_encoded_or_download_pattern
+  finding_kind: correlated_pattern
+  evidence_strength: strong
+forbidden_findings:
+- malicious_verdict
+expected_unknowns:
+- background endpoint noise does not establish intent for the injected chain
+minimum_process_edges: 0
+minimum_unresolved_relationships: 0
+expected_counts:
+  input_records: 5000
+  selected_records: 5000
+  omitted_records: 0
+  input_rejected: 0
+  normalize_dropped: 0
+  unsupported: 0
+generator:
+  seed: 20260817
+  event_count: 5000
+  event_mix:
+  - process
+  - network
+  - dns
+  - file
+  injected_chain: powershell_download_execute

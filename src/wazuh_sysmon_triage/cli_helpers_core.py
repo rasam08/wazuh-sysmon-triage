@@ -7,7 +7,6 @@ _build_run_metadata_payload = _runtime._build_run_metadata_payload
 _emit_dry_run = _runtime._emit_dry_run
 _ensure_out_dir = _runtime._ensure_out_dir
 _generate_case_id = _runtime._generate_case_id
-_normalize_alert_queues = _runtime._normalize_alert_queues
 _parse_iso_ts = _runtime._parse_iso_ts
 _parse_last_duration = _runtime._parse_last_duration
 _print_alert_explanations = _runtime._print_alert_explanations

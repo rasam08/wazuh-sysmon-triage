@@ -7,7 +7,6 @@ _build_run_metadata_payload = _core._build_run_metadata_payload
 _emit_dry_run = _core._emit_dry_run
 _ensure_out_dir = _core._ensure_out_dir
 _generate_case_id = _core._generate_case_id
-_normalize_alert_queues = _core._normalize_alert_queues
 _parse_iso_ts = _core._parse_iso_ts
 _parse_last_duration = _core._parse_last_duration
 _print_alert_explanations = _core._print_alert_explanations
@@ -29,4 +28,3 @@ _validate_required = _core._validate_required
 _write_query_json = _core._write_query_json
 _write_run_metadata = _core._write_run_metadata
 _write_stats_json = _core._write_stats_json
-

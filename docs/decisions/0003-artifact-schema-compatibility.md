@@ -14,8 +14,8 @@ Preserve existing artifact schema contracts for:
 - `timeline.csv`
 - `report.md`
 
-New metadata is additive only (`job_state.json`) and must not break existing readers.
+New metadata is additive only and must not break existing readers.
 
 ## Consequences
 - Backward compatibility for existing v1 consumers.
-- Lower migration risk when introducing async orchestration metadata.
+- Lower migration risk when adding new CLI metadata.

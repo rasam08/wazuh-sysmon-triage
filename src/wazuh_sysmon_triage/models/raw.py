@@ -14,6 +14,7 @@ class WazuhRule(TypedDict, total=False):
     level: int
     description: str
     groups: list[str]
+    mitre: dict[str, Any] | list[str] | str
 
 
 class WinSystem(TypedDict, total=False):
@@ -33,6 +34,40 @@ class WinEventData(TypedDict, total=False):
     ParentProcessId: str | int
     ParentImage: str
     TargetFilename: str
+    IsExecutable: str | bool
+    Archived: str | bool
+    UtcTime: str
+    CreationUtcTime: str
+    CurrentDirectory: str
+    ParentCommandLine: str
+    Hashes: str
+    IntegrityLevel: str
+    SourceIp: str
+    SourcePort: str | int
+    SourceHostname: str
+    DestinationIp: str
+    DestinationPort: str | int
+    DestinationHostname: str
+    Protocol: str
+    Initiated: str | bool
+    EventType: str
+    TargetObject: str
+    Details: str
+    NewName: str
+    QueryName: str
+    QueryStatus: str | int
+    QueryResults: str
+    SourceProcessGUID: str
+    SourceProcessId: str | int
+    SourceThreadId: str | int
+    SourceImage: str
+    TargetProcessGUID: str
+    TargetProcessId: str | int
+    TargetImage: str
+    GrantedAccess: str
+    CallTrace: str
+    SourceUser: str
+    TargetUser: str
 
 
 class WazuhWinData(TypedDict, total=False):
@@ -51,6 +86,7 @@ WazuhAlertSource = TypedDict(
         "rule": WazuhRule,
         "data": WazuhData,
         "@timestamp": str,
+        "timestamp": str,
     },
     total=False,
 )
@@ -62,3 +98,4 @@ class RawHit(TypedDict, total=False):
     _index: str
     _score: float
     fields: dict[str, Any]
+    sort: list[Any]

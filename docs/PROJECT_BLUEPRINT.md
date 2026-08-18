@@ -1,54 +1,46 @@
 # Project Blueprint
 
-## Scope
+## Purpose
 
-`wazuh-sysmon-triage` is a local-first SOC triage toolchain with:
+`wazuh-sysmon-triage` is a Python command-line utility for deterministic triage of high-value Windows endpoint telemetry stored by Wazuh.
 
-- Python CLI (`triage live|offline|run`) for ingest/correlation/detection/render.
-- React UI for run control and analyst workflows.
-- Vite middleware API (`/api/*`) that spawns the CLI and serves case artifacts.
+## Runtime flow
 
-No database, queue, or external service is required for offline operation.
+1. `alert` resolves one Wazuh trigger, or `fetch`/`live` query a selected window; `offline`
+   reads bounded binary NDJSON and isolates individual malformed records.
+2. Normalization converts supported Sysmon and Windows Security records into typed events with provenance.
+3. Correlation builds host-scoped process relationships and attaches file, network,
+   registry, DNS, and process-access activity.
+4. Detection evaluates configured behavioral signals.
+5. Rendering writes deterministic case artifacts under the output root.
 
-## Core flow
+## Core modules
 
-1. Operator starts a run from CLI or UI.
-2. CLI writes a case folder under `out/<case_id>/`.
-3. Middleware reads case artifacts from disk and exposes normalized JSON contracts.
-4. UI renders runs, case overview, alert workbench, bundles, and report content.
+- `cli.py`: command definitions and user-facing options
+- `clients/opensearch_client.py`: Indexer transport
+- `pipeline/fetch.py`: bounded event retrieval
+- `pipeline/investigate.py`: exact Wazuh alert lookup and anchor context
+- `pipeline/case_view.py`: saved-case overview and process-centric analyst pivots
+- `pipeline/normalize.py`: Wazuh/Sysmon parsing
+- `pipeline/correlate.py`: process and artifact relationships
+- `pipeline/remote_activity.py`: bounded Windows logon-session/action relationships
+- `pipeline/detect*.py`: detection logic and suppression
+- `pipeline/pivot.py`: per-alert evidence bundles
+- `pipeline/render.py`: CSV, JSON, and Markdown artifacts
+- `models/`: typed input, event, alert, and finding contracts
 
-## Artifact contract (MVP)
+## Product boundary
 
-Primary artifacts:
+The repository intentionally contains no web interface, HTTP API, middleware server, or Node.js runtime. Analyst interaction and automation happen through the `triage` CLI and generated machine-readable artifacts.
 
-- `timeline.csv`
-- `process_tree.json`
-- `alerts.csv`
-- `report.md`
-- `alert_A###_bundle.json`
+## Validation
 
-Supporting artifacts:
+```powershell
+python -m pytest -q
+python -m ruff check src tests
+python scripts/benchmark_offline.py --source-events 10000 --selected-events 10000 --repeat 2 --max-seconds 30 --max-rss-mib 512
+python -m mypy src
+python -m mypy --strict src/wazuh_sysmon_triage/pipeline
+```
 
-- `query.json`
-- `stats.json`
-- `run_metadata.json`
-- `run.log.ndjson`
-
-Schema version is currently `1.1.0` for generated JSON artifacts.
-
-## Security boundaries
-
-- Case identifiers are validated via allowlist pattern and traversal rejection.
-- Artifact reads are constrained to the configured `out/` root using realpath checks.
-- Middleware run params are validated/coerced before spawn.
-- CLI spawn uses argument arrays (no shell).
-- Single in-process run lock prevents concurrent clobbering.
-- Existing case overwrite requires explicit `allow_overwrite=true` or `force=true`.
-
-## Test/CI gates
-
-- Python tests: `python -m pytest -q`
-- UI tests: `npm --prefix ui run test`
-- UI build: `npm --prefix ui run build`
-
-CI fails on Python or UI gate failures.
+The release gate also performs an offline suite and a bounded live-query dry run.

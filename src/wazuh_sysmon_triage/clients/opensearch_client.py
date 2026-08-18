@@ -1,5 +1,3 @@
-# File: /wazuh-sysmon-triage/wazuh-sysmon-triage/src/wazuh_sysmon_triage/clients/opensearch_client.py
-
 from __future__ import annotations
 
 import logging
@@ -175,7 +173,7 @@ class OpenSearchClient:
         self,
         index_pattern: str,
         query_body: dict[str, Any],
-        search_after: list | None = None,
+        search_after: list[Any] | None = None,
         run_id: str | None = None,
         case_id: str | None = None,
     ) -> dict[str, Any]:
@@ -203,6 +201,57 @@ class OpenSearchClient:
         )
         return response
 
+    def start_scroll(
+        self,
+        index_pattern: str,
+        query_body: dict[str, Any],
+        *,
+        keep_alive: str = "1m",
+        run_id: str | None = None,
+        case_id: str | None = None,
+    ) -> dict[str, Any]:
+        self._validate_index_pattern(index_pattern)
+        response, _ = self._request(
+            "POST",
+            f"/{index_pattern}/_search?scroll={keep_alive}",
+            json_body=query_body,
+            run_id=run_id,
+            case_id=case_id,
+        )
+        return response
+
+    def continue_scroll(
+        self,
+        scroll_id: str,
+        *,
+        keep_alive: str = "1m",
+        run_id: str | None = None,
+        case_id: str | None = None,
+    ) -> dict[str, Any]:
+        response, _ = self._request(
+            "POST",
+            "/_search/scroll",
+            json_body={"scroll": keep_alive, "scroll_id": scroll_id},
+            run_id=run_id,
+            case_id=case_id,
+        )
+        return response
+
+    def delete_scroll(
+        self,
+        scroll_id: str,
+        *,
+        run_id: str | None = None,
+        case_id: str | None = None,
+    ) -> None:
+        self._request(
+            "DELETE",
+            "/_search/scroll",
+            json_body={"scroll_id": [scroll_id]},
+            run_id=run_id,
+            case_id=case_id,
+        )
+
     def create_pit(
         self,
         index_pattern: str,
@@ -217,7 +266,7 @@ class OpenSearchClient:
             case_id=case_id,
         )
         pit_id = response.get("pit_id")
-        if not pit_id:
+        if not isinstance(pit_id, str) or not pit_id:
             raise ValueError("PIT creation failed: missing pit_id")
         LOGGER.info(
             "Created PIT",
@@ -229,7 +278,7 @@ class OpenSearchClient:
         self,
         pit_id: str,
         query_body: dict[str, Any],
-        search_after: list | None = None,
+        search_after: list[Any] | None = None,
         run_id: str | None = None,
         case_id: str | None = None,
     ) -> dict[str, Any]:

@@ -83,10 +83,7 @@ def _resolve_config(
     verify_tls: bool | None,
     index_pattern: str | None,
     event_ids: list[int] | None,
-    min_alert_score: int | None,
     allowlist_image: list[str] | None,
-    alert_queues: list[str] | None,
-    include_dev_queue: bool | None,
     print_stats: bool | None = None,
     alerts_only: bool | None = None,
 ) -> dict[str, Any]:
@@ -131,23 +128,11 @@ def _resolve_config(
         or merged_profile.get("index_pattern")
         or cfg.get("index_pattern"),
         "event_ids": event_ids or merged_profile.get("event_ids") or cfg.get("event_ids"),
-        "min_alert_score": min_alert_score
-        if min_alert_score is not None
-        else merged_profile.get("min_alert_score", cfg.get("min_alert_score")),
         "alert_allowlist_basenames": allowlist_image
         or merged_profile.get("alert_allowlist_basenames")
         or cfg.get("alert_allowlist_basenames"),
-        "destination_scoring_mode": merged_profile.get("destination_scoring_mode")
-        or cfg.get("destination_scoring_mode")
-        or "balanced",
         "suppressions": merged_profile.get("suppressions") or cfg.get("suppressions") or {},
         "context_roles": merged_profile.get("context_roles") or cfg.get("context_roles") or {},
-        "alert_queues": alert_queues
-        or merged_profile.get("alert_queues")
-        or cfg.get("alert_queues"),
-        "include_dev_queue": include_dev_queue
-        if include_dev_queue is not None
-        else bool(merged_profile.get("include_dev_queue", cfg.get("include_dev_queue", False))),
         "print_stats": print_stats
         if print_stats is not None
         else merged_profile.get("print_stats", cfg.get("print_stats")),
@@ -159,4 +144,3 @@ def _resolve_config(
         or {},
     }
     return resolved
-

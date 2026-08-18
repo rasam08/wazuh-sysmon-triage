@@ -1,0 +1,20 @@
+schema_version: 1
+scenario: lsass_access_with_context
+provenance: synthetic
+required_findings:
+- type: lsass_process_access
+  finding_kind: correlated_pattern
+  evidence_strength: deterministic
+forbidden_findings:
+- malicious_verdict
+expected_unknowns:
+- process access is not proof that credentials were extracted
+minimum_process_edges: 0
+minimum_unresolved_relationships: 0
+expected_counts:
+  input_records: 2
+  selected_records: 2
+  omitted_records: 0
+  input_rejected: 0
+  normalize_dropped: 0
+  unsupported: 0

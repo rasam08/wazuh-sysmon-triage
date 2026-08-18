@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 
 from wazuh_sysmon_triage.models.alerts import Alert
 from wazuh_sysmon_triage.models.sysmon import FileCreateEvent, ProcessCreateEvent
+from wazuh_sysmon_triage.output_schema import OUTPUT_SCHEMA_VERSION
 from wazuh_sysmon_triage.pipeline.correlate import correlate_data
 from wazuh_sysmon_triage.pipeline.detect import detect_alerts, filter_alerts
 from wazuh_sysmon_triage.pipeline.pivot import assign_alert_ids, build_pivot_bundles
@@ -61,7 +62,7 @@ def _build_events():
 def test_render_outputs(tmp_path) -> None:
     events = _build_events()
     correlate_result = correlate_data(events)
-    alerts = filter_alerts(detect_alerts(events), min_score=0)
+    alerts = filter_alerts(detect_alerts(events))
     assign_alert_ids(alerts)
     bundles = build_pivot_bundles(alerts, events)
 
@@ -95,7 +96,7 @@ def test_render_outputs(tmp_path) -> None:
     header = timeline_text.splitlines()[0]
     assert (
         header
-        == "ts,event_id,image,command_line,parent_image,target_filename,user,rule_id,agent_name,agent_id"
+        == "ts,wazuh_timestamp,indexed_at,event_id,host_key,process_guid,process_id,image,command_line,parent_process_guid,parent_image,target_filename,user,source_ip,source_port,destination_ip,destination_port,rule_id,rule_level,agent_name,agent_id,source_index,source_document_id,record_id,raw_digest,parse_warnings,registry_event_type,target_object,details,new_name,query_name,query_status,query_results,target_process_guid,target_process_id,target_image,granted_access,call_trace,event_type,hashes,is_executable,archived,logon_type,target_user_name,target_domain_name,target_logon_id,workstation_name,process_name,logon_process_name,authentication_package_name,elevated_token,restricted_admin_mode,subject_user_name,subject_domain_name,subject_logon_id,service_name,service_file_name,service_type,service_start_type,service_account,task_name,task_content,client_process_id,parent_process_id"
     )
     assert "schtasks.exe" in timeline_text
     assert "lab_demo.ps1" in timeline_text
@@ -103,28 +104,30 @@ def test_render_outputs(tmp_path) -> None:
     process_text = process_path.read_text(encoding="utf-8")
     process_json = __import__("json").loads(process_text)
     assert set(process_json.keys()) >= {"agent", "time_range", "nodes", "edges", "artifacts"}
-    assert process_json["schema_version"] == "1.1.0"
+    assert process_json["schema_version"] == OUTPUT_SCHEMA_VERSION
 
     alerts_text = alerts_path.read_text(encoding="utf-8")
     assert (
-        "utc_time,score,alert_type,category,queue,confidence,reason,routing_why,image,command_line,parent_image,destination_ip,destination_port,process_guid,tags"
+        "alert_id,utc_time,alert_type,category,finding_kind,evidence_strength,reason,host_key,image,command_line,parent_image,destination_ip,destination_port,process_guid,evidence_refs,tags,source_host_key,source_ip,source_port"
         in alerts_text
     )
-    assert "persistence_schtasks_create" in alerts_text
+    assert "scheduled_task_create" in alerts_text
 
     report_text = report_path.read_text(encoding="utf-8")
     assert "Incident Summary" in report_text
     assert "92203" in report_text
     assert "schtasks.exe -> powershell.exe" in report_text
     assert "Schema version" in report_text
-    assert "## Executive summary" in report_text
-    assert "## Alerts" in report_text
-    assert "### Queue summary" in report_text
+    assert "## Observed evidence summary" in report_text
+    assert "## Behavior findings" in report_text
     assert "## Wazuh Pivot Queries" in report_text
     assert "## Observed process chains" in report_text
-    assert "## Artifacts & IOCs" in report_text
-    assert "## Detections" in report_text
+    assert "## Observed file activity" in report_text
+    assert "## ATT&CK metadata from source rules" in report_text
     assert "## Network activity" in report_text
+    assert "## DNS activity" in report_text
+    assert "## Registry activity" in report_text
+    assert "## Process access activity" in report_text
     assert "## Notes" in report_text
 
 
@@ -172,9 +175,9 @@ def test_bundle_suppression_context_includes_allowlist_refs() -> None:
     alert = Alert(
         alert_id="A001",
         utc_time=anchor.timestamp,
-        score=95,
-        alert_type="powershell_obfuscation",
+        alert_type="powershell_encoded_or_download_pattern",
         reason="test",
+        host_key=anchor.host_key,
         image=anchor.image,
         command_line=anchor.command_line,
         parent_image=anchor.parent_image,
@@ -189,7 +192,7 @@ def test_bundle_suppression_context_includes_allowlist_refs() -> None:
         allowlist_basenames=["chrome.exe"],
     )
     assert bundles
-    assert bundles[0]["schema_version"] == "1.1.0"
+    assert bundles[0]["schema_version"] == OUTPUT_SCHEMA_VERSION
     context = bundles[0]["suppression_context"]
     assert context["suppressed_related_event_count"] >= 1
     assert "allowlist:chrome.exe" in context["matched_rules"]
@@ -201,9 +204,9 @@ def test_render_report_escapes_markdown_cells(tmp_path) -> None:
     alert = Alert(
         alert_id="A001",
         utc_time=datetime(2024, 1, 1, 0, 1, 0, tzinfo=UTC),
-        score=90,
-        alert_type="powershell_obfuscation",
+        alert_type="powershell_encoded_or_download_pattern",
         reason="line1|line2\nline3",
+        host_key=events[1].host_key,
         image="C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
         command_line="powershell.exe -enc aQBlAHgA | more",
         process_guid="{CHILD}",

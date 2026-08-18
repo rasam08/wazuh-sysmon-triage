@@ -1,0 +1,26 @@
+schema_version: 1
+scenario: benign_admin_powershell
+provenance: synthetic
+required_findings: []
+forbidden_findings:
+- lolbin_outbound
+- lsass_process_access
+- malicious_verdict
+- powershell_encoded_or_download_pattern
+- powershell_reflection_or_native_api_pattern
+- registry_persistence_location_modified
+- remote_logon_followed_by_scheduled_task
+- remote_logon_followed_by_service_install
+- scheduled_task_create
+- user_writable_path_outbound
+expected_unknowns:
+- operator intent is not established by endpoint telemetry
+minimum_process_edges: 0
+minimum_unresolved_relationships: 0
+expected_counts:
+  input_records: 2
+  selected_records: 2
+  omitted_records: 0
+  input_rejected: 0
+  normalize_dropped: 0
+  unsupported: 0

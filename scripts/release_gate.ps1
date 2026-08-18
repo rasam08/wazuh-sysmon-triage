@@ -58,11 +58,9 @@ $env:PYTHONPATH = (Join-Path $repoRoot "src")
 $pythonExe = Resolve-PythonExe
 $configPath = if (Test-Path ".\config.local.yaml") { ".\config.local.yaml" } elseif (Test-Path ".\config.example.yaml") { ".\config.example.yaml" } else { $null }
 
-Invoke-Step -Name "Python schema compatibility test" -Action { & $pythonExe -m pytest -q tests/test_schema_compat.py }
+Invoke-Step -Name "Output contract tests" -Action { & $pythonExe -m pytest -q tests/test_render.py tests/test_config.py }
 Invoke-Step -Name "Python tests" -Action { & $pythonExe -m pytest -q }
-Invoke-Step -Name "UI server contract test" -Action { npm --prefix ui run test -- --run src/test/server-contract.test.ts }
-Invoke-Step -Name "UI tests" -Action { npm --prefix ui run test -- --run }
-Invoke-Step -Name "UI build" -Action { npm --prefix ui run build }
+Invoke-Step -Name "Documentation links" -Action { & $pythonExe scripts/check_markdown_links.py }
 Invoke-Step -Name "Live dry-run probe" -Action {
     $args = @(
         "-m", "wazuh_sysmon_triage",

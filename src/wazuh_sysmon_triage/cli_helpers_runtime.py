@@ -8,8 +8,14 @@ import typer
 
 from wazuh_sysmon_triage.clients.opensearch_client import OpenSearchClient
 from wazuh_sysmon_triage.models.raw import RawHit
-from wazuh_sysmon_triage.pipeline.fetch import fetch_sysmon_events
+from wazuh_sysmon_triage.pipeline.fetch import DEFAULT_EVENT_IDS, fetch_sysmon_events
+from wazuh_sysmon_triage.pipeline.ndjson import (
+    DEFAULT_MAX_RECORD_BYTES,
+    InputQualityReport,
+    read_ndjson,
+)
 from wazuh_sysmon_triage.runtime import RunContext, timed
+from wazuh_sysmon_triage.sanitize import OutputSanitizer
 
 from . import cli_helpers_runtime_config as _config
 from . import cli_helpers_runtime_output as _output
@@ -24,9 +30,7 @@ app = typer.Typer(help="SOC triage CLI for Wazuh Sysmon data.")
 _build_run_metadata_payload = _output._build_run_metadata_payload
 _emit_dry_run = _output._emit_dry_run
 _ensure_out_dir = _utils._ensure_out_dir
-_filter_alerts_by_queue = _utils._filter_alerts_by_queue
 _generate_case_id = _utils._generate_case_id
-_normalize_alert_queues = _utils._normalize_alert_queues
 _parse_iso_ts = _utils._parse_iso_ts
 _parse_last_duration = _utils._parse_last_duration
 _print_alert_explanations = _output._print_alert_explanations
@@ -69,12 +73,17 @@ def _run_fetch_stage(
     max_events: int,
     max_pages: int,
     fail_on_truncation: bool,
+    out_dir: str,
+    quarantine_drops: bool,
+    sanitizer: OutputSanitizer | None,
+    max_record_bytes: int = DEFAULT_MAX_RECORD_BYTES,
 ) -> FetchStageResult:
     hits: list[RawHit] = []
     truncation: TruncationInfo = {"truncated": False, "reason": None}
     raw_handle = None
     client = None
     duration_ms = 0
+    input_quality: InputQualityReport | None = None
 
     try:
         with timed("fetch", logger, run_ctx) as timer:
@@ -89,15 +98,38 @@ def _run_fetch_stage(
                         "case_id": run_ctx.case_id,
                     },
                 )
-                with open(input_ndjson, encoding="utf-8") as handle:
-                    for line in handle:
-                        text = line.strip()
-                        if not text:
-                            continue
-                        hits.append(json.loads(text))
-                        if len(hits) >= max_events:
-                            truncation = {"truncated": True, "reason": "max-events"}
-                            break
+                quarantine_handle = None
+                quarantine_path = os.path.join(out_dir, "quarantine.ndjson")
+                with open(quarantine_path, "w", encoding="utf-8"):
+                    pass
+
+                def write_rejection(payload: dict[str, object]) -> None:
+                    nonlocal quarantine_handle
+                    if quarantine_handle is None:
+                        quarantine_handle = open(quarantine_path, "w", encoding="utf-8")
+                    output_payload: object = payload
+                    if sanitizer:
+                        output_payload = sanitizer.sanitize_obj(payload)
+                    quarantine_handle.write(json.dumps(output_payload))
+                    quarantine_handle.write("\n")
+
+                try:
+                    read_result = read_ndjson(
+                        input_ndjson,
+                        max_events=max_events,
+                        max_record_bytes=max_record_bytes,
+                        on_rejection=write_rejection,
+                        include_raw_line=quarantine_drops,
+                    )
+                finally:
+                    if quarantine_handle is not None:
+                        quarantine_handle.close()
+                hits = read_result.hits
+                input_quality = read_result.report
+                truncation = {
+                    "truncated": input_quality.truncated,
+                    "reason": input_quality.truncation_reason,
+                }
 
                 if _utils._is_scenario_gym_path(input_ndjson):
                     rebased, shifted_fields = _utils._rebase_scenario_gym_hits_to_now(hits)
@@ -122,7 +154,11 @@ def _run_fetch_stage(
                         "stage": "fetch",
                         "run_id": run_ctx.run_id,
                         "case_id": run_ctx.case_id,
-                        "counts": {"hits": len(hits)},
+                        "counts": {
+                            "hits": len(hits),
+                            "input_rejected": input_quality.rejected_records,
+                            "input_blank": input_quality.blank_lines,
+                        },
                     },
                 )
             else:
@@ -159,7 +195,7 @@ def _run_fetch_stage(
                     end_dt=end,
                     agent_id=agent_id,
                     agent_name=agent_name,
-                    event_ids=tuple(event_ids) if event_ids else (1, 3, 11),
+                    event_ids=tuple(event_ids) if event_ids else DEFAULT_EVENT_IDS,
                     agent_mode=agent_mode,
                     run_id=run_ctx.run_id,
                     case_id=run_ctx.case_id,
@@ -207,4 +243,9 @@ def _run_fetch_stage(
         if fail_on_truncation:
             raise typer.Exit(code=4)
 
-    return FetchStageResult(hits=hits, truncation=truncation, duration_ms=duration_ms)
+    return FetchStageResult(
+        hits=hits,
+        truncation=truncation,
+        duration_ms=duration_ms,
+        input_quality=input_quality,
+    )

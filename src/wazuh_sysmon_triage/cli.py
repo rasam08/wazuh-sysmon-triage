@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import typer
 
@@ -15,23 +17,85 @@ from wazuh_sysmon_triage.cli_helpers import (
     _ensure_out_dir,
     _resolve_config,
     _resolve_default_config_path,
+    _safe_case_id,
     _validate_opensearch,
     _validate_required,
     _write_run_metadata,
 )
 from wazuh_sysmon_triage.clients.opensearch_client import OpenSearchClient
 from wazuh_sysmon_triage.logging import setup_logging
-from wazuh_sysmon_triage.pipeline.fetch import build_sysmon_query, fetch_sysmon_events
+from wazuh_sysmon_triage.pipeline.case_view import (
+    CaseViewError,
+    build_case_overview,
+    build_process_view,
+    load_case_artifacts,
+    render_case_overview_text,
+    render_process_view_text,
+)
+from wazuh_sysmon_triage.pipeline.fetch import (
+    DEFAULT_EVENT_IDS,
+    build_sysmon_query,
+    fetch_sysmon_events,
+)
+from wazuh_sysmon_triage.pipeline.investigate import fetch_investigation_anchor
+from wazuh_sysmon_triage.pipeline.ndjson import DEFAULT_MAX_RECORD_BYTES
 from wazuh_sysmon_triage.pipeline.orchestrator import _execute_run
 from wazuh_sysmon_triage.runtime import RunContext
 
 app = typer.Typer(help="SOC triage CLI for Wazuh Sysmon data.")
+
+
+def _version_callback(value: bool) -> None:
+    if value:
+        typer.echo(f"wazuh-sysmon-triage {__version__}")
+        raise typer.Exit()
+
+
+@app.callback()
+def root(
+    version: bool = typer.Option(
+        False,
+        "--version",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show the installed package version and exit.",
+    ),
+) -> None:
+    """Investigate Windows endpoint telemetry collected by Wazuh."""
+    del version
 
 # Backwards-compatible helper exports used by tests and scripts.
 _parse_iso_ts = _cli_helpers._parse_iso_ts
 _parse_last_duration = _cli_helpers._parse_last_duration
 _rebase_scenario_gym_hits_to_now = _cli_helpers._rebase_scenario_gym_hits_to_now
 _resolve_time_window = _cli_helpers._resolve_time_window
+
+
+def _emit_saved_view(
+    payload: dict[str, Any],
+    *,
+    output_format: str,
+    output: str | None,
+    text_renderer: Callable[[dict[str, Any]], str],
+) -> None:
+    normalized_format = output_format.strip().lower()
+    if normalized_format not in {"text", "json"}:
+        raise typer.BadParameter("--format must be text or json", param_hint="--format")
+    rendered = (
+        json.dumps(payload, indent=2, sort_keys=True)
+        if normalized_format == "json"
+        else text_renderer(payload)
+    )
+    if output:
+        output_path = Path(output)
+        if not output_path.parent.is_dir():
+            raise typer.BadParameter(
+                f"Output parent directory does not exist: {output_path.parent}",
+                param_hint="--output",
+            )
+        output_path.write_text(rendered + "\n", encoding="utf-8")
+        return
+    typer.echo(rendered)
 
 
 def _sync_runtime_dependencies() -> None:
@@ -74,9 +138,9 @@ def fetch_command(
     event_id: list[int] | None = typer.Option(
         None,
         "--event-id",
-        help="Sysmon event ID(s) to include. Repeatable (e.g. --event-id 1 --event-id 3 --event-id 11).",
+        help="Windows event ID(s) to include. Repeatable; defaults to the supported evidence set.",
     ),
-    agent_mode: str = typer.Option("any", help="Agent filter mode: any|all."),
+    agent_mode: str = typer.Option("all", help="Agent filter mode: all|any."),
     raw_save: str | None = typer.Option(None, help="Optional NDJSON output path for raw hits."),
     log_level: str = typer.Option("INFO", help="Logging level."),
     log_json: bool = typer.Option(True, help="Emit JSON logs."),
@@ -110,7 +174,6 @@ def fetch_command(
         verify_tls,
         index_pattern,
         event_id,
-        None,
         None,
         None,
         None,
@@ -186,7 +249,7 @@ def fetch_command(
             end_dt=end,
             agent_id=agent_id,
             agent_name=agent_name,
-            event_ids=tuple(event_ids) if event_ids else (1, 3, 11),
+            event_ids=tuple(event_ids) if event_ids else DEFAULT_EVENT_IDS,
             agent_mode=agent_mode,
             run_id=run_ctx.run_id,
             case_id=run_ctx.case_id,
@@ -263,6 +326,243 @@ def fetch_command(
     )
 
 
+@app.command("alert")
+def alert_command(
+    document_id: str = typer.Argument(..., help="OpenSearch _id of the triggering Wazuh alert."),
+    before: str = typer.Option("5m", help="Context to collect before the alert (e.g. 5m, 1h)."),
+    after: str = typer.Option("10m", help="Context to collect after the alert (e.g. 10m, 1h)."),
+    profile: str | None = typer.Option("soc", help="Optional profile name from config presets."),
+    out_dir: str = typer.Option("./out", help="Output directory."),
+    host: str | None = typer.Option(None, help="Host for OpenSearch."),
+    user: str | None = typer.Option(None, help="Username for OpenSearch."),
+    password: str | None = typer.Option(
+        None,
+        help="Password for OpenSearch (prefer WAZUH_OS_PASSWORD environment variable).",
+    ),
+    verify_tls: bool | None = typer.Option(
+        None,
+        "--verify-tls/--no-verify-tls",
+        help="Verify TLS certificate.",
+    ),
+    index_pattern: str | None = typer.Option(None, help="Index pattern for OpenSearch."),
+    context_index_pattern: str | None = typer.Option(
+        None,
+        help=(
+            "Optional separate index pattern for surrounding context, such as indexed "
+            "wazuh-archives-* data. The triggering alert is still resolved from --index-pattern."
+        ),
+    ),
+    raw_save: str | None = typer.Option(None, help="Optional NDJSON output path for context hits."),
+    max_events: int = typer.Option(20000, help="Maximum contextual events to fetch."),
+    max_pages: int = typer.Option(200, help="Maximum contextual pages to fetch."),
+    fail_on_truncation: bool = typer.Option(
+        True,
+        "--fail-on-truncation/--allow-truncation",
+        help="Fail by default when contextual evidence is incomplete.",
+    ),
+    case_id: str | None = typer.Option(None, help="Optional case ID."),
+    explain: bool = typer.Option(True, "--explain/--no-explain", help="Explain findings."),
+    quarantine_drops: bool = typer.Option(
+        True,
+        "--quarantine-drops/--no-quarantine-drops",
+        help="Preserve malformed or unsupported contextual events.",
+    ),
+    sanitize: bool = typer.Option(False, help="Sanitize publishable output."),
+    log_level: str = typer.Option("INFO", help="Logging level."),
+    log_json: bool = typer.Option(True, help="Emit JSON logs."),
+    config: str | None = typer.Option(None, help="Path to YAML config file."),
+) -> None:
+    """Reconstruct endpoint context around one triggering Wazuh alert."""
+    _sync_runtime_dependencies()
+    before_delta = _parse_last_duration(before, option_name="--before")
+    after_delta = _parse_last_duration(after, option_name="--after")
+    resolved_config = _resolve_default_config_path(config)
+    resolved = _resolve_config(
+        resolved_config,
+        profile,
+        None,
+        None,
+        None,
+        None,
+        out_dir,
+        host,
+        user,
+        password,
+        verify_tls,
+        index_pattern,
+        None,
+        None,
+        True,
+        True,
+    )
+    host = resolved.get("host")
+    user = resolved.get("user")
+    password = resolved.get("password")
+    verify_tls = bool(resolved.get("verify_tls"))
+    index_pattern = resolved.get("index_pattern") or "wazuh-alerts-4.x-*"
+    alert_index_pattern = index_pattern
+    resolved_context_pattern = context_index_pattern or alert_index_pattern
+    _validate_opensearch(host, user, password)
+    assert isinstance(host, str)
+    assert isinstance(user, str)
+    assert isinstance(password, str)
+
+    selected_case_id = _safe_case_id(case_id or f"alert-{document_id}")
+    lookup_context = RunContext(case_id=selected_case_id)
+    setup_logging(log_level, json_format=log_json, out_path=None)
+    client = OpenSearchClient(
+        base_url=host,
+        user=user,
+        password=password,
+        verify_tls=verify_tls,
+    )
+    try:
+        anchor = fetch_investigation_anchor(
+            client,
+            index_pattern=alert_index_pattern,
+            document_id=document_id,
+            run_id=lookup_context.run_id,
+            case_id=selected_case_id,
+        )
+    except Exception as exc:
+        typer.echo(f"Alert lookup failed: {exc}")
+        raise typer.Exit(code=3) from exc
+    finally:
+        client.close()
+
+    start_dt, end_dt = anchor.context_window(before=before_delta, after=after_delta)
+    anchor_payload = anchor.to_payload()
+    anchor_payload["alert_index_pattern"] = alert_index_pattern
+    anchor_payload["context_index_pattern"] = resolved_context_pattern
+    anchor_payload["context_source"] = (
+        "wazuh_archives"
+        if "wazuh-archives" in resolved_context_pattern.lower()
+        else "wazuh_alerts"
+        if "wazuh-alerts" in resolved_context_pattern.lower()
+        else "custom"
+    )
+    anchor_payload["context_window"] = {
+        "start": start_dt.isoformat().replace("+00:00", "Z"),
+        "end": end_dt.isoformat().replace("+00:00", "Z"),
+        "before": before,
+        "after": after,
+    }
+    typer.echo(
+        f"Investigating alert {anchor.document_id} on "
+        f"{anchor.agent_name or anchor.agent_id} from {anchor_payload['context_window']['start']} "
+        f"to {anchor_payload['context_window']['end']}"
+    )
+    if context_index_pattern is None and "wazuh-alerts" in resolved_context_pattern.lower():
+        typer.echo(
+            "Evidence caveat: context is being collected from Wazuh alert indices; events that "
+            "did not trigger a rule may be absent. Use --context-index-pattern for indexed archives."
+        )
+
+    _execute_run(
+        profile=profile,
+        start=anchor_payload["context_window"]["start"],
+        end=anchor_payload["context_window"]["end"],
+        last=None,
+        today=False,
+        yesterday=False,
+        agent_id=anchor.agent_id,
+        agent_name=anchor.agent_name,
+        out_dir=resolved.get("out_dir") or "./out",
+        host=host,
+        user=user,
+        password=password,
+        verify_tls=verify_tls,
+        index_pattern=resolved_context_pattern,
+        event_id=list(DEFAULT_EVENT_IDS),
+        agent_mode="all",
+        raw_save=raw_save,
+        log_level=log_level,
+        log_json=log_json,
+        log_file=None,
+        max_events=max_events,
+        max_pages=max_pages,
+        fail_on_truncation=fail_on_truncation,
+        fail_on_input_errors=False,
+        max_record_bytes=DEFAULT_MAX_RECORD_BYTES,
+        print_stats=True,
+        case_id=selected_case_id,
+        input_ndjson=None,
+        allowlist_image=None,
+        alerts_only=True,
+        explain=explain,
+        explain_alert=None,
+        quarantine_drops=quarantine_drops,
+        sanitize=sanitize,
+        dry_run_query=False,
+        default_last_window=None,
+        config=resolved_config,
+        investigation_anchor=anchor_payload,
+    )
+
+
+@app.command("case")
+def case_command(
+    case_dir: str = typer.Argument(..., help="Saved case directory containing case artifacts."),
+    output_format: str = typer.Option("text", "--format", help="Output format: text or json."),
+    output: str | None = typer.Option(None, help="Optional output file; stdout is the default."),
+) -> None:
+    """Summarize a saved case and identify evidence-backed process pivots."""
+    try:
+        payload = build_case_overview(load_case_artifacts(case_dir))
+    except CaseViewError as exc:
+        typer.echo(f"Case inspection failed: {exc}", err=True)
+        raise typer.Exit(code=4) from exc
+    _emit_saved_view(
+        payload,
+        output_format=output_format,
+        output=output,
+        text_renderer=render_case_overview_text,
+    )
+
+
+@app.command("process")
+def process_command(
+    process_guid: str = typer.Argument(..., help="ProcessGuid to investigate."),
+    case_dir: str = typer.Option(..., help="Saved case directory containing case artifacts."),
+    host_key: str | None = typer.Option(
+        None,
+        help="Required when the same ProcessGuid appears on more than one host.",
+    ),
+    include_descendants: bool = typer.Option(
+        True,
+        "--include-descendants/--no-descendants",
+        help="Include activity from descendant processes in the focused scope.",
+    ),
+    max_depth: int = typer.Option(5, min=0, help="Maximum ancestry and descendant depth."),
+    max_events: int = typer.Option(
+        200,
+        min=1,
+        help="Maximum focused timeline events to return; omissions are reported.",
+    ),
+    output_format: str = typer.Option("text", "--format", help="Output format: text or json."),
+    output: str | None = typer.Option(None, help="Optional output file; stdout is the default."),
+) -> None:
+    """Investigate one process from a saved case without querying Wazuh again."""
+    try:
+        payload = build_process_view(
+            load_case_artifacts(case_dir),
+            process_guid,
+            host_key=host_key,
+            include_descendants=include_descendants,
+            max_depth=max_depth,
+            max_events=max_events,
+        )
+    except CaseViewError as exc:
+        typer.echo(f"Process inspection failed: {exc}", err=True)
+        raise typer.Exit(code=4) from exc
+    _emit_saved_view(
+        payload,
+        output_format=output_format,
+        output=output,
+        text_renderer=render_process_view_text,
+    )
+
+
 @app.command("run")
 def run_command(
     profile: str | None = typer.Option(None, help="Optional profile name from config presets."),
@@ -289,9 +589,9 @@ def run_command(
     event_id: list[int] | None = typer.Option(
         None,
         "--event-id",
-        help="Sysmon event ID(s) to include. Repeatable (e.g. --event-id 1 --event-id 3 --event-id 11).",
+        help="Sysmon event ID(s) to include. Repeatable; defaults to the supported evidence set.",
     ),
-    agent_mode: str = typer.Option("any", help="Agent filter mode: any|all."),
+    agent_mode: str = typer.Option("all", help="Agent filter mode: all|any."),
     raw_save: str | None = typer.Option(None, help="Optional NDJSON output path for raw hits."),
     log_level: str = typer.Option("INFO", help="Logging level."),
     log_json: bool = typer.Option(True, help="Emit JSON logs."),
@@ -299,6 +599,16 @@ def run_command(
     max_events: int = typer.Option(20000, help="Maximum events to fetch."),
     max_pages: int = typer.Option(200, help="Maximum PIT pages to fetch."),
     fail_on_truncation: bool = typer.Option(False, help="Fail if results are truncated."),
+    fail_on_input_errors: bool = typer.Option(
+        False,
+        "--fail-on-input-errors",
+        help="Write artifacts, then exit 5 if any offline input record is rejected.",
+    ),
+    max_record_bytes: int = typer.Option(
+        DEFAULT_MAX_RECORD_BYTES,
+        min=1,
+        help="Maximum bytes permitted in one offline NDJSON record.",
+    ),
     print_stats: bool | None = typer.Option(
         None,
         "--print-stats/--no-print-stats",
@@ -306,24 +616,10 @@ def run_command(
     ),
     case_id: str | None = typer.Option(None, help="Optional case ID for case bundle output."),
     input_ndjson: str | None = typer.Option(None, help="Run offline from NDJSON hits."),
-    min_alert_score: int | None = typer.Option(
-        None,
-        help="Minimum score for emitted alerts (0-100). Overrides config if set.",
-    ),
     allowlist_image: list[str] | None = typer.Option(
         None,
         "--allowlist-image",
         help="Image basename to hard-suppress alerts. Repeatable; overrides config if provided.",
-    ),
-    queue: list[str] | None = typer.Option(
-        None,
-        "--queue",
-        help="Queue(s) to include (repeatable): soc_malware|soc_policy|soc_dev|soc_info.",
-    ),
-    include_dev_queue: bool | None = typer.Option(
-        None,
-        "--include-dev-queue/--no-include-dev-queue",
-        help="Include soc_dev queue in emitted alerts.",
     ),
     alerts_only: bool | None = typer.Option(
         None,
@@ -333,7 +629,7 @@ def run_command(
     explain: bool = typer.Option(
         False,
         "--explain",
-        help="Print per-alert scoring/routing explanations after run.",
+        help="Print each finding's rule, evidence strength, and contributing evidence.",
     ),
     explain_alert: str | None = typer.Option(
         None,
@@ -343,7 +639,7 @@ def run_command(
     quarantine_drops: bool = typer.Option(
         False,
         "--quarantine-drops",
-        help="Write dropped events with reasons to quarantine.ndjson.",
+        help="Include rejected offline raw lines and write normalization drops.",
     ),
     sanitize: bool = typer.Option(
         False,
@@ -385,13 +681,12 @@ def run_command(
         max_events=max_events,
         max_pages=max_pages,
         fail_on_truncation=fail_on_truncation,
+        fail_on_input_errors=fail_on_input_errors,
+        max_record_bytes=max_record_bytes,
         print_stats=print_stats,
         case_id=case_id,
         input_ndjson=input_ndjson,
-        min_alert_score=min_alert_score,
         allowlist_image=allowlist_image,
-        alert_queues=queue,
-        include_dev_queue=include_dev_queue,
         alerts_only=alerts_only,
         explain=explain,
         explain_alert=explain_alert,
@@ -430,9 +725,9 @@ def live_command(
     ),
     index_pattern: str = typer.Option("wazuh-alerts-4.x-*", help="Index pattern for OpenSearch."),
     event_id: list[int] | None = typer.Option(
-        None, "--event-id", help="Repeatable Sysmon event IDs."
+        None, "--event-id", help="Repeatable Windows event IDs."
     ),
-    agent_mode: str = typer.Option("any", help="Agent filter mode: any|all."),
+    agent_mode: str = typer.Option("all", help="Agent filter mode: all|any."),
     raw_save: str | None = typer.Option(None, help="Optional NDJSON output path for raw hits."),
     log_level: str = typer.Option("INFO", help="Logging level."),
     log_json: bool = typer.Option(True, help="Emit JSON logs."),
@@ -446,21 +741,8 @@ def live_command(
         help="Print a summary table after the run.",
     ),
     case_id: str | None = typer.Option(None, help="Optional case ID for case bundle output."),
-    min_alert_score: int | None = typer.Option(
-        None, help="Minimum score for emitted alerts (0-100)."
-    ),
     allowlist_image: list[str] | None = typer.Option(
         None, "--allowlist-image", help="Repeatable image allowlist."
-    ),
-    queue: list[str] | None = typer.Option(
-        None,
-        "--queue",
-        help="Queue(s) to include (repeatable): soc_malware|soc_policy|soc_dev|soc_info.",
-    ),
-    include_dev_queue: bool | None = typer.Option(
-        None,
-        "--include-dev-queue/--no-include-dev-queue",
-        help="Include soc_dev queue in emitted alerts.",
     ),
     alerts_only: bool | None = typer.Option(
         None,
@@ -470,7 +752,7 @@ def live_command(
     explain: bool = typer.Option(
         False,
         "--explain",
-        help="Print per-alert scoring/routing explanations after run.",
+        help="Print each finding's rule, evidence strength, and contributing evidence.",
     ),
     explain_alert: str | None = typer.Option(
         None,
@@ -480,7 +762,7 @@ def live_command(
     quarantine_drops: bool = typer.Option(
         False,
         "--quarantine-drops",
-        help="Write dropped events with reasons to quarantine.ndjson.",
+        help="Write normalization drops with reasons to quarantine.ndjson.",
     ),
     sanitize: bool = typer.Option(
         False,
@@ -521,13 +803,12 @@ def live_command(
         max_events=max_events,
         max_pages=max_pages,
         fail_on_truncation=fail_on_truncation,
+        fail_on_input_errors=False,
+        max_record_bytes=DEFAULT_MAX_RECORD_BYTES,
         print_stats=print_stats,
         case_id=case_id,
         input_ndjson=None,
-        min_alert_score=min_alert_score,
         allowlist_image=allowlist_image,
-        alert_queues=queue,
-        include_dev_queue=include_dev_queue,
         alerts_only=alerts_only,
         explain=explain,
         explain_alert=explain_alert,
@@ -549,27 +830,24 @@ def offline_command(
     log_file: str | None = typer.Option(None, help="Optional log file path."),
     max_events: int = typer.Option(20000, help="Maximum events to fetch."),
     fail_on_truncation: bool = typer.Option(False, help="Fail if results are truncated."),
+    fail_on_input_errors: bool = typer.Option(
+        False,
+        "--fail-on-input-errors",
+        help="Write artifacts, then exit 5 if any input record is rejected.",
+    ),
+    max_record_bytes: int = typer.Option(
+        DEFAULT_MAX_RECORD_BYTES,
+        min=1,
+        help="Maximum bytes permitted in one NDJSON record.",
+    ),
     print_stats: bool | None = typer.Option(
         None,
         "--print-stats/--no-print-stats",
         help="Print a summary table after the run.",
     ),
     case_id: str | None = typer.Option(None, help="Optional case ID for case bundle output."),
-    min_alert_score: int | None = typer.Option(
-        None, help="Minimum score for emitted alerts (0-100)."
-    ),
     allowlist_image: list[str] | None = typer.Option(
         None, "--allowlist-image", help="Repeatable image allowlist."
-    ),
-    queue: list[str] | None = typer.Option(
-        None,
-        "--queue",
-        help="Queue(s) to include (repeatable): soc_malware|soc_policy|soc_dev|soc_info.",
-    ),
-    include_dev_queue: bool | None = typer.Option(
-        None,
-        "--include-dev-queue/--no-include-dev-queue",
-        help="Include soc_dev queue in emitted alerts.",
     ),
     alerts_only: bool | None = typer.Option(
         None,
@@ -579,7 +857,7 @@ def offline_command(
     explain: bool = typer.Option(
         False,
         "--explain",
-        help="Print per-alert scoring/routing explanations after run.",
+        help="Print each finding's rule, evidence strength, and contributing evidence.",
     ),
     explain_alert: str | None = typer.Option(
         None,
@@ -589,7 +867,7 @@ def offline_command(
     quarantine_drops: bool = typer.Option(
         False,
         "--quarantine-drops",
-        help="Write dropped events with reasons to quarantine.ndjson.",
+        help="Include rejected raw lines and write normalization drops.",
     ),
     sanitize: bool = typer.Option(
         False,
@@ -630,13 +908,12 @@ def offline_command(
         max_events=max_events,
         max_pages=200,
         fail_on_truncation=fail_on_truncation,
+        fail_on_input_errors=fail_on_input_errors,
+        max_record_bytes=max_record_bytes,
         print_stats=print_stats,
         case_id=case_id,
         input_ndjson=input_ndjson,
-        min_alert_score=min_alert_score,
         allowlist_image=allowlist_image,
-        alert_queues=queue,
-        include_dev_queue=include_dev_queue,
         alerts_only=alerts_only,
         explain=explain,
         explain_alert=explain_alert,

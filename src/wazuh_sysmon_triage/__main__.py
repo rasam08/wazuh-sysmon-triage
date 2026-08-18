@@ -1,5 +1,3 @@
-# File: /wazuh-sysmon-triage/wazuh-sysmon-triage/src/wazuh_sysmon_triage/__main__.py
-
 from wazuh_sysmon_triage.cli import app
 
 
