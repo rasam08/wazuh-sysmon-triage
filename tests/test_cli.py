@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from click.utils import strip_ansi
 from typer.testing import CliRunner
 
 import wazuh_sysmon_triage.cli as cli
@@ -1170,4 +1171,5 @@ def test_alert_command_names_invalid_context_option() -> None:
     result = runner.invoke(cli.app, ["alert", "wazuh-alert-123", "--before", "invalid"])
 
     assert result.exit_code == 2
-    assert "--before must look like 15m, 2h, or 7d" in result.output
+    normalized_output = " ".join(strip_ansi(result.output).split())
+    assert "--before must look like 15m, 2h, or 7d" in normalized_output
