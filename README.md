@@ -335,6 +335,12 @@ make smoke-offline
 make release-gate
 ```
 
+## AI-assisted development
+
+This project was built with extensive use of AI coding agents. I use AI for implementation, refactoring, tests, documentation, and technical exploration.
+I am responsible for the project's goals, design decisions, experiments, acceptance criteria, review, and validation. I do not claim hand-authorship of every line of source code.
+Because AI-assisted implementation can introduce subtle errors, the project emphasizes deterministic testing, explicit claim boundaries, reproducibility, and independent validation wherever possible.
+
 ## License
 
 MIT. See LICENSE.
