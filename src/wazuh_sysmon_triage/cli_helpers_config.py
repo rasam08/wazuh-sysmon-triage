@@ -8,7 +8,7 @@ import typer
 from wazuh_sysmon_triage.config import config_has_inline_password, load_config
 from wazuh_sysmon_triage.operations import parse_optional_bool
 
-from .cli_helpers_runtime_utils import DEFAULT_PROFILE_PRESETS
+from .cli_helpers_utils import DEFAULT_PROFILE_PRESETS
 
 
 def _validate_required(
