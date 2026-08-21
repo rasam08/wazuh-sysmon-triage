@@ -15,8 +15,8 @@ from wazuh_sysmon_triage.pipeline.ndjson import InputQualityReport
 from wazuh_sysmon_triage.pipeline.normalize import NormalizeReport
 from wazuh_sysmon_triage.sanitize import OutputSanitizer
 
-from .cli_helpers_runtime_types import TruncationInfo
-from .cli_helpers_runtime_utils import _alert_contributors
+from .cli_helpers_types import TruncationInfo
+from .cli_helpers_utils import _alert_contributors
 
 
 def _write_run_metadata(

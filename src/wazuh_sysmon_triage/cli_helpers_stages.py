@@ -24,13 +24,13 @@ from wazuh_sysmon_triage.pipeline.render import (
 from wazuh_sysmon_triage.runtime import RunContext, timed
 from wazuh_sysmon_triage.sanitize import OutputSanitizer
 
-from .cli_helpers_runtime_types import (
+from .cli_helpers_types import (
     CorrelateStageResult,
     DetectStageResult,
     NormalizeStageResult,
     TruncationInfo,
 )
-from .cli_helpers_runtime_utils import _process_line
+from .cli_helpers_utils import _process_line
 
 
 def _run_normalize_stage(
