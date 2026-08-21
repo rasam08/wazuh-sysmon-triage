@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v2.1.0 - 2026-08-21
+
+This maintenance release brings the public documentation in line with the rebuilt CLI,
+restores the documented config-precedence rules, and simplifies private implementation
+modules without changing the public CLI or output schema `2.4.0`.
+
 - Rewrote the README, setup, deployment, lab, evidence, troubleshooting, security, and
   maintainer documentation around the current CLI and the still-pending live qualification.
 - Replaced generated acceptance-scenario boilerplate with a short explanation of what each
@@ -14,7 +20,8 @@
 - Fixed setting precedence so built-in profile presets rank below values written in the config
   file. A preset is a default, so `agent_name`, `verify_tls`, and the rest now follow CLI flag,
   selected profile, config file, preset, model default.
-- Removed the stale local review and roadmap documents.
+- Stopped ignoring the retired `ROADMAP_TO_10.md` and `REVIEW_REPORT.md` scratch-note
+  filenames.
 
 ## v2.0.0 - 2026-08-18
 

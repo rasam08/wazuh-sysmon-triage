@@ -2,7 +2,7 @@
 
 This file used to be a forward-looking implementation plan. Workstreams 1 through 3 are now implemented, so it now records what has evidence behind it and what is still unfinished.
 
-## Status at v2.0.0
+## Status for v2.1.0
 
 | Workstream | Status | Evidence in the repository |
 | --- | --- | --- |

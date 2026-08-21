@@ -2,7 +2,7 @@
 
 ## Current public state
 
-The repository is public at `rasam08/wazuh-sysmon-triage`. Release `v2.0.0` is the August 2026 major rework of the original 2026 project, and the earlier Git history was preserved.
+The repository is public at `rasam08/wazuh-sysmon-triage`. Release `v2.1.0` is the August 2026 maintenance release built on the evidence-first `v2.0.0` major rework, and the earlier Git history is preserved.
 
 The release currently provides a wheel, source distribution, and `SHA256SUMS.txt` through GitHub Releases. Nothing is published to PyPI or a container registry.
 
