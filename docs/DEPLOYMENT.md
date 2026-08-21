@@ -34,7 +34,7 @@ Download the wheel and `SHA256SUMS.txt` from the matching GitHub release, verify
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install .\wazuh_sysmon_triage-2.0.0-py3-none-any.whl
+.\.venv\Scripts\python.exe -m pip install .\wazuh_sysmon_triage-2.1.0-py3-none-any.whl
 .\.venv\Scripts\triage.exe --version
 ```
 

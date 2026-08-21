@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "wazuh-sysmon-triage"
-version = "2.0.0"
+version = "2.1.0"
 description = "Deterministic CLI triage for Windows endpoint telemetry collected by Wazuh."
 authors = ["Rasam Moghaddam <rasammgg@gmail.com>"]
 homepage = "https://github.com/rasam08/wazuh-sysmon-triage"
