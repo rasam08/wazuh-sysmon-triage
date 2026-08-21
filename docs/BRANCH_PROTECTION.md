@@ -1,28 +1,18 @@
-# Branch Protection Guidance
+# Current branch protection
 
-Target branch: `main`
+`main` is protected on GitHub. This file records the policy that is actually enabled, not a future recommendation.
 
-## Required GitHub Settings
+## Enabled settings
 
-1. Require pull request before merging.
-2. Require at least 1 approving review.
-3. Dismiss stale pull request approvals when new commits are pushed.
-4. Require conversation resolution before merge.
-5. Require status checks to pass before merging.
-6. Do not allow force pushes.
-7. Do not allow deletions.
+- Changes must arrive through a pull request.
+- The `quality-gate` status check is required and must be up to date with `main`.
+- Review conversations must be resolved before merge.
+- Administrators are included in the rule.
+- Force pushes and branch deletion are disabled.
+- Required approving reviews are set to `0`.
 
-## Required Status Checks
+The zero-review setting is intentional for a solo-maintained repository: it preserves the pull-request and CI boundary without making every maintainer-authored change impossible to merge. If additional maintainers become active, this should be raised to at least one approval and stale approvals should be dismissed after new commits.
 
-Configure this workflow check as required:
+`quality-gate` is defined in `.github/workflows/ci.yml`. It runs security scans, documentation-link validation, linting, typing, tests and coverage, golden snapshots, package checks, and the bounded 10k performance benchmark.
 
-- `quality-gate`
-
-This maps to `.github/workflows/ci.yml` and enforces security scans, documentation links,
-lint, type-checks, tests, bounded performance, and package validation.
-
-## Recommended Admin Policy
-
-1. Include administrators in branch protection.
-2. Restrict who can push directly to `main`.
-3. Use squash merges for linear, auditable history.
+Squash merging is preferred for focused documentation or dependency pull requests. A merge commit is still appropriate for a deliberately preserved major-rework branch, as used for v2.0.0.

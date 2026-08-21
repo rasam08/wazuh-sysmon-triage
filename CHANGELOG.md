@@ -1,10 +1,25 @@
 # Changelog
 
+## Unreleased
+
+- Rewrote the README, setup, deployment, lab, evidence, troubleshooting, security, and
+  maintainer documentation around the current CLI and the still-pending live qualification.
+- Replaced generated acceptance-scenario boilerplate with a short explanation of what each
+  fixture proves.
+- Fixed CLI defaults so YAML/profile `out_dir` and `index_pattern` values are honored when
+  their command-line flags are omitted.
+- Collapsed the `cli_helpers` and `pipeline/detect` re-export shim chains into one module each,
+  renamed the `cli_helpers_runtime_*` modules to `cli_helpers_*`, and declared their re-export
+  surface with `__all__`. No behavior change.
+- Fixed setting precedence so built-in profile presets rank below values written in the config
+  file. A preset is a default, so `agent_name`, `verify_tls`, and the rest now follow CLI flag,
+  selected profile, config file, preset, model default.
+- Removed the stale local review and roadmap documents.
+
 ## v2.0.0 - 2026-08-18
 
-This is a major, evidence-first rework of the original February 2026 release. It keeps the
-project's existing history while replacing the earlier score-driven and UI-assisted design
-with a focused, deterministic investigation CLI.
+A major, evidence-first rework of the February 2026 release: the earlier score-driven,
+UI-assisted design is replaced by a deterministic investigation CLI.
 
 - Added schema 2.4 per-record NDJSON isolation for malformed JSON, invalid UTF-8,
   non-object values, and oversized records, with streamed quarantine metadata and strict mode.

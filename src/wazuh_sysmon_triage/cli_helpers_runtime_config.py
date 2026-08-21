@@ -35,6 +35,7 @@ def _resolve_verify_tls_setting(
     cli_value: bool | None,
     profile_value: Any,
     config_value: Any,
+    preset_value: Any,
     env_value: str | None,
     active_profile: str | None,
 ) -> bool:
@@ -46,6 +47,8 @@ def _resolve_verify_tls_setting(
         result = bool(profile_value)
     elif config_value is not None:
         result = bool(config_value)
+    elif preset_value is not None:
+        result = bool(preset_value)
     else:
         result = _profile_default_verify_tls(active_profile)
 
@@ -88,59 +91,80 @@ def _resolve_config(
     alerts_only: bool | None = None,
 ) -> dict[str, Any]:
     cfg: dict[str, Any] = {}
+    cfg_explicit: set[str] = set()
     if config_path:
         _warn_inline_password_in_config(config_path)
         loaded = load_config(config_path)
         cfg = loaded.model_dump()
+        cfg_explicit = set(loaded.model_dump(exclude_unset=True))
 
     active_profile = profile or cfg.get("active_profile")
-    merged_profile: dict[str, Any] = {}
+    preset: dict[str, Any] = {}
+    profile_values: dict[str, Any] = {}
     if active_profile:
-        merged_profile = dict(DEFAULT_PROFILE_PRESETS.get(active_profile, {}))
-        config_profiles = cfg.get("profiles") or {}
-        if active_profile in config_profiles:
-            profile_values = config_profiles.get(active_profile) or {}
-            merged_profile.update(
-                {key: value for key, value in profile_values.items() if value is not None}
-            )
+        preset = dict(DEFAULT_PROFILE_PRESETS.get(active_profile, {}))
+        configured_profile = (cfg.get("profiles") or {}).get(active_profile) or {}
+        profile_values = {
+            key: value for key, value in configured_profile.items() if value is not None
+        }
+
+    def written(key: str) -> Any:
+        # model_dump() fills unset fields with model defaults, so only keys the user actually
+        # wrote in the config file may outrank a built-in preset.
+        return cfg.get(key) if key in cfg_explicit else None
+
+    # A built-in preset is a default, so it ranks below anything the user wrote: CLI flag,
+    # then the selected profile, then the config file, then the preset, then the model default.
+    def setting(key: str, cli_value: Any = None) -> Any:
+        return (
+            cli_value
+            or profile_values.get(key)
+            or written(key)
+            or preset.get(key)
+            or cfg.get(key)
+        )
+
+    def flag(key: str, cli_value: bool | None) -> Any:
+        # Same order, but False is a meaningful value rather than "unset".
+        for layer in (
+            cli_value,
+            profile_values.get(key),
+            written(key),
+            preset.get(key),
+            cfg.get(key),
+        ):
+            if layer is not None:
+                return layer
+        return None
 
     resolved_verify_tls = _resolve_verify_tls_setting(
         cli_value=verify_tls,
-        profile_value=merged_profile.get("verify_tls"),
-        config_value=cfg.get("verify_tls"),
+        profile_value=profile_values.get("verify_tls"),
+        config_value=written("verify_tls"),
+        preset_value=preset.get("verify_tls"),
         env_value=os.getenv("WAZUH_OS_VERIFY_TLS"),
         active_profile=active_profile,
     )
 
     resolved = {
         "profile": active_profile,
-        "start": start or merged_profile.get("start") or cfg.get("start"),
-        "end": end or merged_profile.get("end") or cfg.get("end"),
-        "agent_id": agent_id or merged_profile.get("agent_id") or cfg.get("agent_id"),
-        "agent_name": agent_name or merged_profile.get("agent_name") or cfg.get("agent_name"),
-        "out_dir": out_dir or merged_profile.get("out_dir") or cfg.get("out_dir"),
-        "host": host or merged_profile.get("host") or cfg.get("host") or os.getenv("WAZUH_OS_HOST"),
-        "user": user or merged_profile.get("user") or cfg.get("user") or os.getenv("WAZUH_OS_USER"),
+        "start": setting("start", start),
+        "end": setting("end", end),
+        "agent_id": setting("agent_id", agent_id),
+        "agent_name": setting("agent_name", agent_name),
+        "out_dir": setting("out_dir", out_dir),
+        "host": setting("host", host) or os.getenv("WAZUH_OS_HOST"),
+        "user": setting("user", user) or os.getenv("WAZUH_OS_USER"),
         # Credentials are env-first by policy: avoid secrets in config files.
         "password": password or os.getenv("WAZUH_OS_PASSWORD"),
         "verify_tls": resolved_verify_tls,
-        "index_pattern": index_pattern
-        or merged_profile.get("index_pattern")
-        or cfg.get("index_pattern"),
-        "event_ids": event_ids or merged_profile.get("event_ids") or cfg.get("event_ids"),
-        "alert_allowlist_basenames": allowlist_image
-        or merged_profile.get("alert_allowlist_basenames")
-        or cfg.get("alert_allowlist_basenames"),
-        "suppressions": merged_profile.get("suppressions") or cfg.get("suppressions") or {},
-        "context_roles": merged_profile.get("context_roles") or cfg.get("context_roles") or {},
-        "print_stats": print_stats
-        if print_stats is not None
-        else merged_profile.get("print_stats", cfg.get("print_stats")),
-        "alerts_only": alerts_only
-        if alerts_only is not None
-        else merged_profile.get("alerts_only", cfg.get("alerts_only")),
-        "artifact_retention": merged_profile.get("artifact_retention")
-        or cfg.get("artifact_retention")
-        or {},
+        "index_pattern": setting("index_pattern", index_pattern),
+        "event_ids": setting("event_ids", event_ids),
+        "alert_allowlist_basenames": setting("alert_allowlist_basenames", allowlist_image),
+        "suppressions": setting("suppressions") or {},
+        "context_roles": setting("context_roles") or {},
+        "print_stats": flag("print_stats", print_stats),
+        "alerts_only": flag("alerts_only", alerts_only),
+        "artifact_retention": setting("artifact_retention") or {},
     }
     return resolved

@@ -122,7 +122,7 @@ def fetch_command(
     end: str | None = typer.Option(None, help="End time in ISO8601 format."),
     agent_id: str | None = typer.Option(None, help="Agent ID."),
     agent_name: str | None = typer.Option(None, help="Agent Name."),
-    out_dir: str = typer.Option("./out", help="Output directory."),
+    out_dir: str | None = typer.Option(None, help="Output directory (default: ./out)."),
     host: str | None = typer.Option(None, help="Host for OpenSearch."),
     user: str | None = typer.Option(None, help="Username for OpenSearch."),
     password: str | None = typer.Option(
@@ -134,7 +134,10 @@ def fetch_command(
         "--verify-tls/--no-verify-tls",
         help="Verify TLS certificate.",
     ),
-    index_pattern: str = typer.Option("wazuh-alerts-4.x-*", help="Index pattern for OpenSearch."),
+    index_pattern: str | None = typer.Option(
+        None,
+        help="Index pattern for OpenSearch (default: wazuh-alerts-4.x-*).",
+    ),
     event_id: list[int] | None = typer.Option(
         None,
         "--event-id",
@@ -332,7 +335,7 @@ def alert_command(
     before: str = typer.Option("5m", help="Context to collect before the alert (e.g. 5m, 1h)."),
     after: str = typer.Option("10m", help="Context to collect after the alert (e.g. 10m, 1h)."),
     profile: str | None = typer.Option("soc", help="Optional profile name from config presets."),
-    out_dir: str = typer.Option("./out", help="Output directory."),
+    out_dir: str | None = typer.Option(None, help="Output directory (default: ./out)."),
     host: str | None = typer.Option(None, help="Host for OpenSearch."),
     user: str | None = typer.Option(None, help="Username for OpenSearch."),
     password: str | None = typer.Option(
@@ -573,7 +576,7 @@ def run_command(
     yesterday: bool = typer.Option(False, help="Use UTC yesterday window (00:00 to 00:00)."),
     agent_id: str | None = typer.Option(None, help="Agent ID."),
     agent_name: str | None = typer.Option(None, help="Agent Name."),
-    out_dir: str = typer.Option("./out", help="Output directory."),
+    out_dir: str | None = typer.Option(None, help="Output directory (default: ./out)."),
     host: str | None = typer.Option(None, help="Host for OpenSearch."),
     user: str | None = typer.Option(None, help="Username for OpenSearch."),
     password: str | None = typer.Option(
@@ -585,7 +588,10 @@ def run_command(
         "--verify-tls/--no-verify-tls",
         help="Verify TLS certificate.",
     ),
-    index_pattern: str = typer.Option("wazuh-alerts-4.x-*", help="Index pattern for OpenSearch."),
+    index_pattern: str | None = typer.Option(
+        None,
+        help="Index pattern for OpenSearch (default: wazuh-alerts-4.x-*).",
+    ),
     event_id: list[int] | None = typer.Option(
         None,
         "--event-id",
@@ -711,7 +717,7 @@ def live_command(
     yesterday: bool = typer.Option(False, help="Use UTC yesterday window (00:00 to 00:00)."),
     agent_id: str | None = typer.Option(None, help="Agent ID."),
     agent_name: str | None = typer.Option(None, help="Agent Name."),
-    out_dir: str = typer.Option("./out", help="Output directory."),
+    out_dir: str | None = typer.Option(None, help="Output directory (default: ./out)."),
     host: str | None = typer.Option(None, help="Host for OpenSearch."),
     user: str | None = typer.Option(None, help="Username for OpenSearch."),
     password: str | None = typer.Option(
@@ -723,7 +729,10 @@ def live_command(
         "--verify-tls/--no-verify-tls",
         help="Verify TLS certificate.",
     ),
-    index_pattern: str = typer.Option("wazuh-alerts-4.x-*", help="Index pattern for OpenSearch."),
+    index_pattern: str | None = typer.Option(
+        None,
+        help="Index pattern for OpenSearch (default: wazuh-alerts-4.x-*).",
+    ),
     event_id: list[int] | None = typer.Option(
         None, "--event-id", help="Repeatable Windows event IDs."
     ),
@@ -824,7 +833,7 @@ def live_command(
 def offline_command(
     profile: str | None = typer.Option("soc", help="Optional profile name from config presets."),
     input_ndjson: str = typer.Option(..., help="Run offline from NDJSON hits."),
-    out_dir: str = typer.Option("./out", help="Output directory."),
+    out_dir: str | None = typer.Option(None, help="Output directory (default: ./out)."),
     log_level: str = typer.Option("INFO", help="Logging level."),
     log_json: bool = typer.Option(True, help="Emit JSON logs."),
     log_file: str | None = typer.Option(None, help="Optional log file path."),

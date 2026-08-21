@@ -1,217 +1,166 @@
-# Reproduce results
+# Reproducing the project results
 
-This project supports two reproducible paths:
+There are two different reproduction paths:
 
-- Offline (NDJSON replay): no lab required; ideal for reviewers.
-- Online (OpenSearch): query Wazuh Indexer directly.
+- **Offline replay** exercises the local pipeline with checked-in synthetic NDJSON and needs no Wazuh infrastructure.
+- **Live collection** queries Wazuh Indexer/OpenSearch and is still awaiting the declared real-lab qualification.
 
-## 0) Set up Python environment (Windows)
+Use the offline path when reviewing the release.
 
-From the repository root:
+## Install from the checkout
+
+Windows PowerShell:
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -U pip
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install .
+.\.venv\Scripts\triage.exe --version
 ```
 
-Notes:
+macOS/Linux:
 
-- If you are on macOS/Linux, the venv interpreter is typically `./.venv/bin/python`.
-- The commands below assume you use the venv interpreter (so deleting/recreating `.venv/` is safe).
+```bash
+python3.12 -m venv .venv
+./.venv/bin/python -m pip install --upgrade pip
+./.venv/bin/python -m pip install .
+./.venv/bin/triage --version
+```
 
-## 1) Offline reproduction (recommended)
+The examples below use `triage`. Activate the virtual environment or substitute its full executable path.
 
-From the repository root:
+## Smallest offline replay
 
 ```powershell
 triage offline --input-ndjson samples/incident_001/raw_hits.ndjson --case-id INCIDENT-001 --print-stats
 ```
 
-Expected artifacts:
+The case is written below the output root:
 
 - `out/INCIDENT-001/timeline.csv`
 - `out/INCIDENT-001/process_tree.json`
 - `out/INCIDENT-001/alerts.csv`
 - `out/INCIDENT-001/report.md`
-- `out/INCIDENT-001/alert_A001_bundle.json` (plus one bundle per emitted alert)
+- `out/INCIDENT-001/run_metadata.json`
+- one `alert_A###_bundle.json` per emitted finding
 
-## 2) Online reproduction (OpenSearch / Wazuh Indexer)
-
-### Environment variables (preferred)
-
-Set credentials through the process environment rather than a committed configuration file.
-Use your secret manager's shell integration when available:
+Review it without rerunning the pipeline:
 
 ```powershell
-$env:WAZUH_OS_HOST = "https://indexer:9200"
-$env:WAZUH_OS_USER = "triage-readonly"
-$env:WAZUH_OS_PASSWORD = "<password>"
-$env:WAZUH_OS_VERIFY_TLS = "true"
+triage case out\INCIDENT-001
 ```
 
-Run:
+## Broader checked-in examples
+
+Endpoint chain and process pivot:
 
 ```powershell
-triage live --last 2h --case-id INCIDENT-ONLINE-001 --agent-name "anon" --print-stats
+triage offline --input-ndjson samples/incident_002_endpoint_chain/raw_hits.ndjson --case-id P1-ENDPOINT-CHAIN
+triage case out\P1-ENDPOINT-CHAIN
+triage process "{PROCESS-GUID}" --case-dir out\P1-ENDPOINT-CHAIN --format json
 ```
 
-Recommended alert-centered workflow:
+Process lifecycle and file cleanup:
 
 ```powershell
-triage alert <opensearch-_id> --before 5m --after 10m --case-id INCIDENT-ALERT-001
-```
-
-This resolves the exact Wazuh alert, derives its agent and time, and collects the
-supported Sysmon evidence around it. Context truncation fails by default.
-
-The default context source is the Wazuh alert index. When indexed archives are
-available, preserve the exact alert lookup while collecting fuller context:
-
-```powershell
-triage alert <opensearch-_id> --context-index-pattern "wazuh-archives-4.x-*" --case-id INCIDENT-ALERT-ARCHIVE-001
-```
-
-Review a completed case without querying OpenSearch again:
-
-```powershell
-triage case out\INCIDENT-ALERT-001
-triage process "{PROCESS-GUID}" --case-dir out\INCIDENT-ALERT-001 --format json
-```
-
-Reproduce the P2 lifecycle fixture:
-
-```powershell
-triage offline --input-ndjson samples/incident_003_file_cleanup/raw_hits.ndjson --case-id P2-FILE-CLEANUP --print-stats
+triage offline --input-ndjson samples/incident_003_file_cleanup/raw_hits.ndjson --case-id P2-FILE-CLEANUP
 triage process "{CLEANUP-CMD}" --case-dir out\P2-FILE-CLEANUP
 ```
 
-### Config-driven run (example)
-
-You can place non-secret defaults in a YAML file and keep secrets in environment variables.
+Remote logon, service, and scheduled-task evidence:
 
 ```powershell
+triage offline --input-ndjson samples/incident_004_remote_service_task/raw_hits.ndjson --case-id P3-REMOTE-ACTIVITY
+triage case out\P3-REMOTE-ACTIVITY
+```
+
+The P3 output is supposed to remain a lead. The fixture proves that exact logon-session and account relationships can be retained; it does not prove malicious lateral movement.
+
+The nine manifest-driven scenarios under `samples/acceptance/` cover benign behavior, suspicious chains, degraded input, remote administration, and endpoint noise. See [SCENARIO_GYM.md](SCENARIO_GYM.md) for the fixture map and regeneration commands.
+
+## Check malformed-input handling
+
+```powershell
+triage offline --input-ndjson samples/acceptance/degraded_telemetry/raw_hits.ndjson --case-id DEGRADED --quarantine-drops
+```
+
+The run should keep usable records, report input/normalization drops, and write `quarantine.ndjson`. To make any rejected input produce a non-zero automation result after artifacts are written:
+
+```powershell
+triage offline --input-ndjson samples/acceptance/degraded_telemetry/raw_hits.ndjson --case-id DEGRADED-STRICT --fail-on-input-errors
+```
+
+Strict input failure exits with code `5`.
+
+## Save a live result for later offline review
+
+Keep real captures under an ignored evidence/output directory, not under `samples/`.
+
+```powershell
+New-Item -ItemType Directory -Force out\captures | Out-Null
+triage fetch --agent-name "windows-lab-01" `
+  --start "2026-08-18T00:00:00Z" --end "2026-08-18T02:00:00Z" `
+  --raw-save out\captures\raw_hits.ndjson --out-dir out\fetch-metadata
+```
+
+Replay the capture:
+
+```powershell
+triage offline --input-ndjson out\captures\raw_hits.ndjson --case-id CAPTURE-REPLAY --print-stats
+```
+
+A real capture may contain sensitive information even if no finding is emitted.
+
+## Prepare a live query
+
+Copy the example and replace its placeholder host, user, and agent values:
+
+```powershell
+Copy-Item config.example.yaml config.local.yaml
 $env:WAZUH_OS_PASSWORD = "<password>"
-
-triage live --config config.example.yaml --last 2h --case-id INCIDENT-CONFIG-001
+triage live --config config.local.yaml --agent-name "windows-lab-01" --last 2h --dry-run-query
 ```
 
-### TLS note
-
-If you are using a lab indexer with a self-signed certificate:
+The dry run is safe and performs no network request. When the live trial is explicitly authorized, the first real probe should stay small:
 
 ```powershell
-triage live --no-verify-tls --last 2h ...
+triage live --config config.local.yaml --agent-name "windows-lab-01" `
+  --last 15m --max-events 100 --max-pages 2 --fail-on-truncation `
+  --case-id LAB-SMOKE --print-stats
 ```
 
-### SSH tunnel note
+Do not read the presence of output artifacts as proof of generic Wazuh compatibility. Record the exact Wazuh, Sysmon, configuration, index, and TLS details described in [LAB_SETUP.md](LAB_SETUP.md).
 
-If the indexer API is only reachable from the server itself:
-
-Terminal 1 (keep running):
+For alert-centered collection:
 
 ```powershell
-ssh -N -L 9920:localhost:9200 <user>@<wazuh-indexer>
+triage alert <opensearch-_id> --before 5m --after 10m --case-id LAB-ALERT
+triage alert <opensearch-_id> --context-index-pattern "wazuh-archives-4.x-*" --case-id LAB-ALERT-ARCHIVES
 ```
 
-Terminal 2:
+The second command still resolves the trigger from the alert index; only the surrounding context changes to the archive pattern.
+
+## Validation before a release
+
+Run the normal suite:
 
 ```powershell
-$env:WAZUH_OS_HOST = "https://127.0.0.1:9920"
-triage live --no-verify-tls --last 2h --case-id INCIDENT-TUNNEL-001 --agent-name "anon"
+python -m pytest -q
+python scripts/check_markdown_links.py
 ```
 
-Recommended short command:
+Run the convenience gate:
 
 ```powershell
-triage live --config .\config.local.yaml --last 2h --case-id incident-002-endpoint --no-verify-tls
+.\scripts\release_gate.ps1
 ```
 
-## 3) Reproducibility notes
-
-- The tool is designed to produce deterministic bundle structure and stable ordering.
-- Bundles include captured inputs and metadata (e.g., `query.json`, `run_metadata.json`, `stats.json`) to support review and reruns.
-- Detection-stage tuning is reproducible through explicit suppression and allowlist rules.
-
-## 4) Create your own offline dataset (online → NDJSON → offline)
-
-If you want a fully portable artifact for review, first fetch raw hits from OpenSearch into NDJSON, then rerun offline.
-
-Fetch to NDJSON:
-
-```powershell
-.\.venv\Scripts\python.exe -m wazuh_sysmon_triage fetch --agent-name "anon" --start "2026-02-10T00:00:00Z" --end "2026-02-10T02:00:00Z" --raw-save ./samples/my_capture/raw_hits.ndjson --out-dir ./out
-```
-
-Replay offline:
-
-```powershell
-triage offline --input-ndjson ./samples/my_capture/raw_hits.ndjson --case-id INCIDENT-OFFLINE-REPLAY-001 --print-stats
-```
-
-## 5) Release regression checklist (quick gate)
-
-Run these from repository root before tagging or deploying.
-
-### A. Python full suite
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest -q
-```
-
-Pass criteria: all tests pass.
-
-### B. Focused hardening suite (input/schema/sanitize/scenario)
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest -q tests/test_ndjson.py tests/test_acceptance_corpus.py tests/test_investigate.py tests/test_e2e_offline.py tests/test_perf_smoke.py tests/test_sanitize.py
-```
-
-Pass criteria: all focused tests pass.
-
-### C. Bounded performance qualification
+Run the pull-request performance profile:
 
 ```powershell
 python scripts/benchmark_offline.py --source-events 10000 --selected-events 10000 --repeat 2 --max-seconds 30 --max-rss-mib 512 --report benchmark-report-10k.json
 ```
 
-Pass criteria: the report records `passed: true`, both stable digests match, the injected
-chain remains present, and wall-time/RSS thresholds pass. The scheduled performance
-workflow adds 50k, 100k, scaling-growth, and one-million-source gates. See
-`docs/PERFORMANCE.md`.
+The scheduled performance workflow adds 50k, 100k, scaling-growth, and one-million-source checks. [PERFORMANCE.md](PERFORMANCE.md) records the thresholds and current local evidence.
 
-### D. Live connectivity + bounded pipeline probe
-
-Prerequisite:
-
-```powershell
-$env:WAZUH_OS_PASSWORD = "<password>"
-```
-
-Dry-run query validation:
-
-```powershell
-triage live --config .\config.local.yaml --profile soc --last 2h --dry-run-query
-```
-
-Bounded end-to-end probe:
-
-```powershell
-triage live --config .\config.local.yaml --profile soc --last 2h --max-events 10 --max-pages 1 --print-stats --alerts-only
-```
-
-Pass criteria:
-
-- Dry-run prints resolved query payload successfully.
-- Probe reaches `Run complete` and all stages (`fetch`, `normalize`, `correlate`, `detect`, `render`) finish.
-
-### E. Scenario timestamp recency check
-
-```powershell
-triage offline --config .\config.local.yaml --input-ndjson samples/scenario_gym/obfuscated_powershell_critical_combo.ndjson --case-id rebase-check --print-stats --alerts-only
-```
-
-Pass criteria:
-
-- Logs include `Scenario gym timestamps rebased`.
-- Output timeline timestamps are near current UTC time.
+The release gate's live step is only `--dry-run-query`. A real live query remains a separate, explicitly authorized trial.

@@ -1,145 +1,109 @@
-# Outputs (case bundle)
+# Reading a case bundle
 
-A completed run produces a case directory under your output root (default: `./out/<case-id>`):
+A successful run writes one case directory below the output root, normally `./out/<case-id>`. The files are meant to work together: CSV for quick review, JSON for exact structure and automation, and Markdown for a readable handoff.
 
-- `timeline.csv`
-- `process_tree.json`
-- `alerts.csv`
-- `report.md`
-- `alert_A001_bundle.json` (and one file per emitted alert)
-- `investigation_anchor.json` (for `triage alert` runs)
+## Files in a case
 
-Most runs also include supporting artifacts such as:
+The core bundle contains:
 
-- `query.json` — the resolved query parameters used for fetching
-- `stats.json` — counts and timing
-- `run_metadata.json` — environment and run context
-- `run.log.ndjson` — structured logs
-- `quarantine.ndjson` — input rejection metadata plus optional raw input and normalization drops
+- `timeline.csv`: flattened activity in timestamp order
+- `process_tree.json`: the host-scoped correlated evidence model
+- `alerts.csv`: flat export of local behavior findings
+- `report.md`: readable evidence summary and Wazuh pivot queries
+- `alert_A###_bundle.json`: one focused evidence package per finding
+- `investigation_anchor.json`: the exact triggering Wazuh document for `triage alert` runs
 
-JSON artifacts (`process_tree.json`, `stats.json`, `run_metadata.json`, `alert_A###_bundle.json`)
-include `schema_version` for compatibility tracking.
+Most runs also write:
 
-For offline input rejection, `quarantine.ndjson` is created whenever a record is rejected,
-even when raw quarantine was not requested. Offline `stats.json` and
-`run_metadata.json` include `input_quality`: physical and blank line counts, accepted and
-rejected records, stable rejection counts by reason, integrity, and truncation.
+- `query.json`: resolved collection/input parameters
+- `stats.json`: event, drop, suppression, truncation, and timing counts
+- `run_metadata.json`: run context and stage durations
+- `run.log.ndjson`: structured runtime log
+- `quarantine.ndjson`: rejected input metadata and, only when requested, bounded raw previews
 
-Input-stage quarantine rows always include stage, stable reason, line number, byte offset,
-record size, SHA-256 digest, and a traceback-free error summary. `raw_line` is absent unless
-`--quarantine-drops` is supplied. Oversized raw text is bounded and marked
-`raw_truncated`; all raw previews are capped at 4 KiB and the reader stops after 10,000
-rejections. `--sanitize` applies before any raw text is written.
+The output root itself keeps `telemetry_history.ndjson` and `telemetry_summary.json` across runs. Those files summarize run success/failure and stage latency; they are not part of one individual case.
 
-Console also prints concise process stage lines for operator visibility:
+JSON case artifacts include `schema_version` where the compatibility contract applies. The current contract is documented in [OUTPUT_SCHEMA_COMPAT.md](OUTPUT_SCHEMA_COMPAT.md).
 
-- `[process] fetch ...`
-- `[process] normalize ...`
-- `[process] correlate ...`
-- `[process] detect ...`
-- `[process] render ...`
+## Input quality and quarantine
 
-## timeline.csv
+For offline replay, `stats.json` and `run_metadata.json` include `input_quality`:
 
-Purpose: A flattened, analyst-friendly view of the activity ordered by timestamp.
+- physical and blank line counts;
+- accepted and rejected object counts;
+- stable rejection reasons;
+- configured record-size/rejection limits;
+- confirmed truncation; and
+- `complete` or `degraded` collection integrity.
 
-Typical use:
+An input-stage quarantine row records the stage, reason, line number, byte offset, record size, SHA-256 digest, and a traceback-free error summary. `raw_line` is absent unless `--quarantine-drops` was supplied. Raw previews are capped at 4 KiB, oversized previews are marked, and sanitization happens before a raw preview is written.
 
-- Pivot by `event_id` (1, 3, 5, 10–14, 22, 23, 26)
-- Group by `image` and `parent_image`
-- Review `command_line` for execution context
-- Review file paths (`target_filename`) for artifacts
-- Review network destinations (when present) for outbound connections
-- Review registry targets, DNS queries/results, and process-access source/target pairs
-- Review file deletion and process termination without treating missing events as proof of absence
-- Review Windows Security remote logons (4624 types 3/10), service installs (4697),
-  and scheduled-task creation (4698)
+The reader stops after 10,000 rejected records to prevent an invalid source from growing quarantine output without bound.
 
-## process_tree.json
+## `timeline.csv`
 
-Purpose: The correlated model used to drive the report.
+Use the timeline for fast filtering and sorting. It preserves occurrence, Wazuh ingestion, and indexing times separately when the source provides them.
 
-It captures:
+Useful pivots include:
 
-- Process nodes and parent/child edges
-- File artifacts created (EID 11)
-- File deletions (EID 23/26)
-- Process termination times (EID 5)
-- Network connections (EID 3)
-- Registry changes (EID 12–14)
-- DNS queries (EID 22)
-- Process access source/target evidence (EID 10)
-- Remote authentication, service installation, and scheduled-task creation evidence
-- Bounded remote-activity leads with explicit relationship strength and source resolution
-- Correlation evidence (why a node/edge/artifact exists)
+- event ID and event type;
+- image, parent image, command line, user, and ProcessGuid;
+- created/deleted file paths and hashes;
+- destination IP/port and DNS query/results;
+- registry targets and values;
+- process-access source/target pairs;
+- process termination; and
+- Windows Security remote logon (4624 types 3/10), service install (4697), and scheduled-task creation (4698).
 
-This file is intended to be machine-readable so the bundle can be re-rendered or programmatically reviewed.
+A missing row is not proof that the underlying action did not happen. Collection policy, alert-only indexing, unsupported fields, truncation, and sensor gaps all matter.
 
-## report.md
+## `process_tree.json`
 
-Purpose: A human-readable SOC-style narrative built from the correlated model.
+This is the machine-readable correlation model behind the report. It contains host-scoped process nodes and parent/child edges, along with attached network, file, registry, DNS, process-access, authentication, service, task, termination, and deletion activity.
 
-Professional usage guidance:
+Edges and artifacts keep relationship strength and source references. Unresolved parents or other incomplete relationships stay in `unresolved_relationships` rather than being guessed.
 
-- Treat the report as documentation of observed telemetry and heuristic flags.
-- Avoid attributing intent unless you have additional evidence outside Sysmon/Wazuh.
-- Use the report as a starting point for follow-on validation (host-based triage, enrichment, or scoping).
+Remote-activity leads are bounded by host, time, and exact session/account evidence. They are scoping leads, not proof of lateral movement.
 
-The report also includes a **Wazuh Pivot Queries** section with copy/paste-ready query strings for:
+## `report.md`
 
-- Process create events by `processGuid`
-- Network, file, registry, and DNS events by `processGuid`
-- Process-access events by `sourceProcessGUID`
-- Child process pivots by `parentProcessGuid`
-- Destination pivots for observed outbound connections
+The report turns the correlated model into a readable case narrative. It describes what was recorded, what matched a local behavior rule, which evidence supports the match, and what remains unknown.
 
-The **Behavior findings** section shows the exact rule match, finding kind,
-evidence strength, host identity, and source evidence locators. These are leads,
-not maliciousness verdicts.
+Its **Wazuh Pivot Queries** section provides copy/paste query strings for observed ProcessGuids, parent ProcessGuids, destinations, and related network/file/registry/DNS/process-access evidence.
 
-## alerts.csv
+Read the **Behavior findings** section as investigative leads. `finding_kind` and `evidence_strength` describe the match and its support; neither field estimates malicious intent.
 
-Purpose: Flat behavior-finding export for analyst review and downstream ingestion.
+## `alerts.csv`
 
-Key columns:
+The filename is retained for compatibility, but rows are local behavior findings rather than Wazuh alert verdicts.
 
-- `alert_type`, `category`, `finding_kind`, `evidence_strength`
-- `reason`, `host_key`, `evidence_refs`
-- process/network context (`image`, `command_line`, `destination_ip`, `process_guid`)
-- remote-source context (`source_host_key`, `source_ip`, `source_port`)
+Important columns include:
 
-## alert_A###_bundle.json
+- `alert_type`, `category`, `finding_kind`, and `evidence_strength`;
+- `reason`, `host_key`, and `evidence_refs`;
+- image, command line, destination, and process context; and
+- `source_host_key`, `source_ip`, and `source_port` for bounded remote-activity leads.
 
-Purpose: Per-alert pivot package for analyst workflow.
+## `alert_A###_bundle.json`
 
-Each bundle includes:
+Each finding bundle keeps the rule metadata, nearest anchor event, bounded sibling/context windows, ancestry, child processes, linked activity, suppression context, and source evidence.
 
-- Finding metadata (`alert_id`, rule fields, kind, evidence strength, reason)
-- Anchor event nearest to alert time and primary event type
-- Bounded pivot windows (siblings ±2m, contextual activity ±5m)
-- Process ancestry, sibling spawns, file creation/deletion, network/registry/DNS activity,
-  process access, and process termination
-- Native authentication, service-install, and scheduled-task evidence for host-level findings
-- Suppression context summary (`suppressed_related_event_count`, `matched_rules`)
+For host-level remote findings, the bundle includes the relevant authentication, service-install, and scheduled-task records. A bundle narrows review; it does not replace the complete timeline.
 
-## investigation_anchor.json
+## `investigation_anchor.json`
 
-Purpose: Preserve the exact Wazuh alert that initiated `triage alert`, including
-document/index identity, occurrence timestamp, agent, rule metadata, source digest,
-and the contextual collection window. The anchor is not treated as a local verdict.
+`triage alert` saves the exact alert document/index identity, occurrence time, agent, Wazuh rule metadata, source digest, selected alert/context index patterns, and context window.
 
-## Saved-case analyst views
+The original Wazuh trigger is preserved as an anchor. It is not reclassified as a local verdict.
 
-`triage case <case-dir>` reads the stable case artifacts and reports collection
-integrity separately from telemetry coverage. It explicitly warns when the evidence
-originates from Wazuh alert indices because events that did not trigger a Wazuh rule
-may be absent. Exact domains, destinations, or process hashes reused on multiple hosts
-are shown as scoping leads, never as proof of lateral movement.
-When no local behavior finding exists, the case view offers at most 20 collected
-processes as neutral evidence pivots and labels their basis accordingly.
+## Reviewing a saved case
 
-`triage process <guid> --case-dir <case-dir>` returns the selected process, resolved
-ancestry, bounded descendants, findings, exact ProcessGuid-linked activity, a focused
-timeline, unresolved relationships, unknown fields, and copy/paste Wazuh pivots.
-The `selection` object accounts for matching, omitted, and unrelated events so noise
-reduction remains visible and reviewable. Use `--format json` for piping or automation.
+`triage case <case-dir>` reports collection integrity separately from telemetry coverage, summarizes findings, and offers evidence-backed process pivots. If the source was a Wazuh alert index, it warns that non-alerting events may be absent.
+
+`triage process <guid> --case-dir <case-dir>` returns the selected process, ancestry, bounded descendants, exact ProcessGuid-linked activity, focused timeline, findings, unknowns, unresolved relationships, and Wazuh pivots. Its `selection` object accounts for matching, omitted, and unrelated events so the reduced view is still auditable.
+
+Use `--format json` for piping or automation. If the same ProcessGuid exists on multiple hosts, add `--host-key` instead of allowing cross-host evidence to mix.
+
+## Before sharing
+
+Case bundles may contain usernames, hostnames, command lines, paths, hashes, and network addresses. `--sanitize` removes common identifiers, but always review the result manually before publishing or sending it outside the investigation boundary.

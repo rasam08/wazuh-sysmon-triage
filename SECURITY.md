@@ -1,23 +1,21 @@
-# Security Policy
+# Security policy
 
 ## Supported versions
 
-Security fixes are applied to the latest release and the `main` branch. Older releases may not
-receive patches. Live Wazuh/Sysmon compatibility remains experimental until the qualification
-described in `docs/PROFESSIONAL_ACCEPTANCE_PLAN.md` is complete.
+Security fixes are made on the latest release and `main`. Older releases may not receive a backport.
 
-## Reporting a vulnerability
+The offline pipeline is the qualified part of v2. Live Wazuh/Sysmon compatibility remains experimental until the real-lab work in [docs/PROFESSIONAL_ACCEPTANCE_PLAN.md](docs/PROFESSIONAL_ACCEPTANCE_PLAN.md) is complete.
 
-Use GitHub's private vulnerability reporting for this repository: open the **Security** tab,
-choose **Advisories**, and select **Report a vulnerability**. Do not open a public issue with
-exploit details, credentials, or real telemetry.
+## Report a vulnerability privately
 
-Include the affected version or commit, impact, reproduction steps, and any suggested mitigation.
-Use synthetic data and remove secrets from logs or screenshots. If private reporting is not yet
-enabled, contact the maintainer through the GitHub profile without including sensitive details.
+Private vulnerability reporting is enabled for this repository. Open the repository's **Security** tab, choose **Advisories**, and select **Report a vulnerability**.
 
-## Sensitive evidence
+If GitHub's private reporting form is unavailable, email `rasammgg@gmail.com`. Do not put exploit details, credentials, private telemetry, or unredacted screenshots in a public issue.
 
-Real Wazuh and Sysmon records may contain personal data, credentials in command lines, internal
-hostnames, paths, and network addresses. Keep live captures and generated case directories out of
-Git, apply least-privilege access, and sanitize artifacts before sharing them.
+A useful report includes the affected version or commit, the impact, clear reproduction steps, and any mitigation you have already found. Use synthetic data wherever possible and remove secrets from logs.
+
+## Handle evidence as sensitive data
+
+Wazuh and Sysmon records can contain usernames, command lines, file paths, internal hostnames, IP addresses, and secrets accidentally passed on a command line. Keep live captures and generated case directories out of Git, restrict access to them, and review sanitized output before sharing it.
+
+`--sanitize` reduces common identity and network exposure in generated artifacts. It is a sharing aid, not a guarantee that a case is safe to publish.

@@ -1,19 +1,18 @@
-# Runbook: Disk Space Exhaustion
+# Runbook: output storage is full
 
-## Detection
-- Write failures in run execution/logging
-- OS alerts for low disk space on output volume
+Use this when a run cannot write artifacts or the output volume is close to capacity.
 
-## Immediate Actions
-1. Check free space on volume containing output and temp directories.
-2. Identify large stale case directories and build artifacts.
-3. Pause high-volume CLI runs.
+## First checks
+
+1. Pause new high-volume runs.
+2. Check free space on the volume holding `--out-dir` and temporary files.
+3. Identify large old case directories, raw captures, benchmark reports, and build artifacts.
+4. Check whether `artifact_retention` is enabled and appropriate for this evidence policy.
 
 ## Recovery
-1. Free space safely (archive/delete old case outputs per retention policy).
-2. Validate the CLI can create/update artifacts.
-3. Resume runs gradually and monitor errors.
 
-## Post-Incident
-- Define retention limits and cleanup automation.
-- Add capacity alerts based on disk usage thresholds.
+Archive or remove old evidence only under the applicable retention policy. Avoid deleting an active or unreviewed case just to make a command succeed.
+
+After freeing space, run a small bundled offline sample and confirm the timeline, JSON, Markdown, log, and root telemetry files can all be created. Resume larger work gradually while watching for write failures.
+
+For a recurring problem, set reviewed age/size limits, move long-term evidence to managed storage, and alert before the volume is exhausted.

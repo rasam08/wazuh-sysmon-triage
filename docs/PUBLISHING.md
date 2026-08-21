@@ -1,52 +1,65 @@
-# Publishing Checklist
+# Publishing and releases
 
-Use this checklist before making the repository public or creating a release.
+## Current public state
 
-## Repository review
+The repository is public at `rasam08/wazuh-sysmon-triage`. Release `v2.0.0` is the August 2026 major rework of the original 2026 project, and the earlier Git history was preserved.
 
-- Review `git status --short` and confirm every deletion and new file is intentional.
-- Review the complete Git history, not only the current tree, for credentials, private keys,
-  internal URLs, real telemetry, and unwanted author email addresses.
-- Confirm bundled samples are synthetic and use reserved documentation domains or address ranges.
-- Keep `config.local.*`, `.env`, output directories, benchmarks, and local review reports ignored.
-- Enable GitHub private vulnerability reporting and branch protection for `main`.
+The release currently provides a wheel, source distribution, and `SHA256SUMS.txt` through GitHub Releases. Nothing is published to PyPI or a container registry.
 
-Rewriting published Git history is disruptive. If sensitive history is found, stop and clean it
-before publication rather than relying on a later deletion commit.
+GitHub private vulnerability reporting is enabled. `main` is protected with pull requests, strict `quality-gate` checks, conversation resolution, admin enforcement, and force-push/deletion protection. The exact rule is recorded in [BRANCH_PROTECTION.md](BRANCH_PROTECTION.md).
+
+## Before a future release
+
+Review the whole repository state, not only the last commit:
+
+- confirm every tracked change is intentional;
+- scan history and the current tree for secrets, private keys, internal URLs, real telemetry, and unwanted author addresses;
+- keep `config.local.*`, `.env`, output folders, generated benchmarks, and local review notes ignored;
+- confirm new fixtures are synthetic and use safe identities, domains, and address ranges; and
+- update the version, changelog, output-schema notes, and documentation together.
+
+Rewriting public history is disruptive. If sensitive history is found, stop the release and clean it deliberately rather than relying on a later deletion commit.
+
+The maintainer identity for package metadata and normal local commits is `Rasam Moghaddam <rasammgg@gmail.com>`.
 
 ## Validation
 
-Run from a clean checkout with Python 3.12:
+From a clean Python 3.12 environment:
 
 ```powershell
 python -m pip install --upgrade pip
 python -m pip install .
-python -m pip install build twine pytest pytest-cov ruff mypy types-PyYAML
+python -m pip install build twine pytest pytest-cov ruff mypy types-PyYAML vulture bandit pip-audit detect-secrets
+python -m bandit -q -r src -lll
+python -m pip_audit --local --skip-editable
+python scripts/scan_tracked_secrets.py --repo-root . --include-untracked
 python -m ruff check src tests scripts
 python -m mypy src
+python -m mypy --strict src/wazuh_sysmon_triage/pipeline
+python -m vulture src tests --min-confidence 80
 python -m pytest -q
 python scripts/check_markdown_links.py
-python scripts/scan_tracked_secrets.py --repo-root . --include-untracked
 python -m build
 python -m twine check dist/*
 ```
 
-The local release gate runs contract tests, the complete Python suite, documentation links,
-and a bounded live-query dry run that does not contact Wazuh:
+The convenience gate is:
 
 ```powershell
 .\scripts\release_gate.ps1
 ```
 
-The live Wazuh trial remains a separate, explicitly authorized qualification and is not part of
-ordinary pull-request CI.
+It runs contract tests, the Python suite, documentation links, and a dry-run live query. The last step performs no network call and is not a substitute for the pending Wazuh/Sysmon lab qualification.
 
-## Release preparation
+Run the bounded performance commands in [PERFORMANCE.md](PERFORMANCE.md) before a performance-sensitive release.
 
-- Move completed entries from `Unreleased` in `CHANGELOG.md` into a versioned section.
-- Keep `pyproject.toml` and `wazuh_sysmon_triage.__version__` synchronized.
-- Create a signed or annotated `vX.Y.Z` tag only after CI passes.
-- Verify the GitHub release contains both wheel and source distribution plus `SHA256SUMS.txt`.
-- Install the wheel into a fresh environment and run `triage --help` plus one offline sample.
+## Tag and release flow
 
-This repository's release workflow creates GitHub release assets. It does not publish to PyPI.
+1. Merge the release pull request after `quality-gate` passes.
+2. Confirm `pyproject.toml` and `wazuh_sysmon_triage.__version__` match the intended version.
+3. Move completed changelog entries into the dated version section.
+4. Create and push an annotated `vX.Y.Z` tag.
+5. Let `.github/workflows/release.yml` test the tagged commit, build the wheel and source distribution, generate checksums, and create the GitHub release.
+6. Download the published wheel into a clean environment and run `triage --version`, `triage --help`, and one bundled offline sample.
+
+Build the Dockerfile from the final commit as a separate release check. A successful local Docker build does not publish an image.

@@ -1,20 +1,22 @@
-# Runbook: OpenSearch Unreachable
+# Runbook: Wazuh Indexer is unreachable
 
-## Detection
-- A live CLI run reports a connection, authentication, or TLS failure.
-- A bounded fetch cannot reach the configured Indexer endpoint.
+Use this when a live command reports a connection, authentication, TLS, or timeout failure.
 
-## Immediate Actions
-1. Verify OpenSearch host/port reachability from the analyst host or container.
-2. Validate credentials/TLS mode and certificate chain.
-3. Confirm `WAZUH_OS_HOST` points to the Indexer API rather than Wazuh Dashboards.
+## First checks
+
+1. Confirm `WAZUH_OS_HOST` points to the Indexer API rather than Wazuh Dashboards.
+2. Check host/port reachability from the same workstation or container running the CLI.
+3. Verify the username, password source, TLS setting, and certificate chain.
+4. Confirm the account can read the selected alert/archive pattern.
+
+```powershell
+triage live --dry-run-query --last 15m --agent-name <name>
+```
+
+This validates only resolved configuration and query construction; it does not contact Wazuh.
 
 ## Recovery
-1. Correct host/auth/TLS settings.
-2. Run `triage live --dry-run-query --last 15m --agent-name <name>` to validate resolved
-   configuration and query construction without contacting Wazuh.
-3. Run a small bounded live query to validate connectivity and end-to-end fetch success.
 
-## Post-Incident
-- Document root cause (network, auth, certificate, config drift).
-- Add/update environment configuration guardrails.
+After correcting the network, authentication, or certificate issue, run a small bounded query with a short window and low event/page caps. Confirm every pipeline stage finishes before returning to the original investigation window.
+
+Record whether the cause was routing/firewall, wrong service/port, credentials, certificate trust, permissions, or configuration drift. Update the lab/config guardrail if the same mistake is likely to recur.
