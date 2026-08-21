@@ -1,8 +1,8 @@
-# Output Schema Compatibility
+# Output schema compatibility
 
-## Current target
+## Current version
 
-Generated case artifacts and saved-case views use schema version `2.4.0` (see `src/wazuh_sysmon_triage/output_schema.py`).
+Generated case artifacts and saved-case views currently use schema version `2.4.0` (see `src/wazuh_sysmon_triage/output_schema.py`).
 
 JSON artifacts expected to include `schema_version`:
 

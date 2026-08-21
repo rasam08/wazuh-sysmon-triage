@@ -581,6 +581,49 @@ def test_lab_profile_defaults_verify_tls_off(tmp_path) -> None:
     assert resolved["verify_tls"] is False
 
 
+def test_config_file_value_outranks_builtin_preset(tmp_path) -> None:
+    # The soc preset ships a placeholder agent_name; a real one in the config file wins.
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text("agent_name: config-agent\n", encoding="utf-8")
+
+    resolved = _resolved_config(config_path=str(cfg), profile="soc")
+    assert resolved["agent_name"] == "config-agent"
+
+
+def test_profile_section_outranks_config_file(tmp_path) -> None:
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text(
+        "\n".join(
+            [
+                "agent_name: config-agent",
+                "profiles:",
+                "  soc:",
+                "    agent_name: profile-agent",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    resolved = _resolved_config(config_path=str(cfg), profile="soc")
+    assert resolved["agent_name"] == "profile-agent"
+
+
+def test_builtin_preset_applies_when_config_is_silent(tmp_path) -> None:
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text("index_pattern: custom-alerts-*\n", encoding="utf-8")
+
+    resolved = _resolved_config(config_path=str(cfg), profile="soc")
+    assert resolved["agent_name"] == "anon"
+
+
+def test_explicit_config_verify_tls_outranks_lab_preset(tmp_path) -> None:
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text("verify_tls: true\n", encoding="utf-8")
+
+    resolved = _resolved_config(config_path=str(cfg), profile="lab")
+    assert resolved["verify_tls"] is True
+
+
 def test_verify_tls_env_override(monkeypatch) -> None:
     monkeypatch.setenv("WAZUH_OS_VERIFY_TLS", "false")
     resolved = _resolved_config(profile="soc")
@@ -835,6 +878,43 @@ def test_live_dry_run_query_without_opensearch_creds(tmp_path) -> None:
     assert payload["mode"] == "live"
     assert payload["schema_version"] == OUTPUT_SCHEMA_VERSION
     assert payload["query"]["query"]["bool"]["filter"]
+
+
+def test_live_command_uses_config_output_and_index_defaults(tmp_path) -> None:
+    configured_out = tmp_path / "configured-out"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                f"out_dir: {configured_out.as_posix()}",
+                "agent_name: config-agent",
+                "index_pattern: custom-alerts-*",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "live",
+            "--dry-run-query",
+            "--last",
+            "2h",
+            "--config",
+            str(config_path),
+            "--case-id",
+            "config-defaults",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload_start = result.stdout.find("{")
+    payload = json.loads(result.stdout[payload_start:])
+    assert Path(payload["out_dir"]) == configured_out / "config-defaults"
+    assert payload["resolved"]["index_pattern"] == "custom-alerts-*"
+    filters = payload["query"]["query"]["bool"]["filter"]
+    assert {"term": {"agent.name": "config-agent"}} in filters
 
 
 def test_offline_dry_run_query_does_not_require_input_file(tmp_path) -> None:

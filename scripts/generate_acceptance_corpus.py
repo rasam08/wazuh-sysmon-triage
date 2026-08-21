@@ -30,6 +30,54 @@ KNOWN_FINDINGS = [
     "user_writable_path_outbound",
 ]
 
+SCENARIO_DOCS = {
+    "benign_admin_powershell": (
+        "Benign administrative PowerShell",
+        "Ordinary interactive PowerShell with routine process and network context. "
+        "It is here to prove that normal administration does not become a local finding.",
+    ),
+    "benign_software_installation": (
+        "Benign software installation",
+        "A normal installer creates expected process, service, and maintenance activity. "
+        "Approval context is outside the telemetry, but the fixture must not invent a threat.",
+    ),
+    "benign_rmm_remote_maintenance": (
+        "Benign remote maintenance",
+        "A network logon followed by service creation represents legitimate remote support. "
+        "The expected output is a reviewable hypothesis, never a maliciousness verdict.",
+    ),
+    "powershell_download_execute": (
+        "PowerShell download and execution",
+        "PowerShell download behavior is joined to file, network, and child-process evidence. "
+        "The fixture checks the stronger correlated finding and its source references.",
+    ),
+    "lsass_access_with_context": (
+        "LSASS access with context",
+        "A recorded Sysmon process-access event targets LSASS while preserving the source "
+        "process. The result is an evidence-backed lead, not proof of credential theft.",
+    ),
+    "registry_runkey_persistence": (
+        "Run-key registry change",
+        "A process modifies a Windows Run key. The expected finding keeps the exact registry "
+        "target and originating process without claiming the referenced file is malicious.",
+    ),
+    "remote_service_and_task": (
+        "Remote service and scheduled task",
+        "Out-of-order multi-host logon, service, and scheduled-task records exercise exact "
+        "session relationships and bounded remote-activity leads.",
+    ),
+    "degraded_telemetry": (
+        "Degraded telemetry",
+        "Malformed, unsupported, duplicated, invalid-time, out-of-order, and missing-parent "
+        "records prove that collection gaps stay visible without destroying the usable case.",
+    ),
+    "noisy_workstation": (
+        "Noisy workstation",
+        "Deterministic browser, Defender, Office, developer-tool, update, and background "
+        "activity surrounds one injected PowerShell chain to test noise accounting at scale.",
+    ),
+}
+
 
 def _finding(
     finding_type: str,
@@ -203,10 +251,13 @@ def generate_corpus(
             if name == "noisy_workstation" and not include_noisy_raw
             else "`raw_hits.ndjson` is a deterministic checked-in synthetic fixture."
         )
+        title, summary = SCENARIO_DOCS[name]
         (scenario_dir / "README.md").write_text(
-            f"# {name.replace('_', ' ').title()}\n\n"
-            "This scenario is synthetic and contains no production identities or credentials.\n\n"
-            f"{generated_note}\n",
+            f"# {title}\n\n"
+            f"{summary}\n\n"
+            "All identities and records are synthetic; there are no production credentials "
+            "or organization-specific names in this scenario.\n\n"
+            f"{generated_note} See `expected.yaml` for the machine-checked conclusions.\n",
             encoding="utf-8",
         )
 

@@ -1,339 +1,268 @@
 # wazuh-sysmon-triage
 
-Deterministic SOC/IR triage CLI for high-value Windows endpoint telemetry collected by Wazuh and stored in OpenSearch.
+A Python CLI that turns Wazuh-collected Windows telemetry into a reviewable case bundle: a
+timeline, a process tree, behavior findings, and per-finding evidence that traces back to the
+source records.
 
-> **v2.0 major rework:** first released in February 2026, paused after the original
-> March 2026 development cycle, and revived in August 2026 as an evidence-first,
-> Python-only investigation tool. The original commits remain in this repository.
+It queries a live Wazuh Indexer/OpenSearch instance or replays a local NDJSON file. Findings
+describe observed and correlated behavior; the analyst reaches the verdict.
 
-## Project status
+## What it does
 
-The offline pipeline is covered by deterministic fixtures, acceptance scenarios, and bounded
-performance tests. Qualification against a declared live Wazuh/Sysmon lab is still pending;
-until that is complete, treat live compatibility as experimental. Findings describe observed
-or correlated behavior and require analyst review—they are not automated incident verdicts.
+- exact Wazuh alert lookup with a preserved investigation anchor;
+- bounded live collection or offline NDJSON replay;
+- host-scoped process correlation with source provenance;
+- Sysmon process, network, file, registry, DNS, process-access, termination, and deletion
+  evidence;
+- Windows Security remote-logon, service-install, and scheduled-task evidence;
+- per-record input rejection and quarantine, so one bad line does not cost the whole run;
+- saved-case and process-focused views that do not query Wazuh again; and
+- deterministic acceptance and performance gates.
 
-All bundled events are synthetic and use documentation or private network ranges. Never commit
-real credentials, private keys, or unsanitized case evidence.
+## Status
 
-## What changed in v2
+The offline path is covered by deterministic fixtures, nine acceptance scenarios,
+malformed-input cases, and bounded 10k/50k/100k performance gates. The live OpenSearch path is
+implemented but has not been qualified against a real Wazuh/Sysmon lab; treat it as
+experimental.
 
-The original project combined a deterministic CLI with an experimental web UI and score-driven
-triage. The rework narrows the product to a reviewable command-line workflow: it preserves raw
-provenance, reconstructs bounded endpoint context, exposes collection gaps, and reports observed
-or correlated behavior without presenting automated incident verdicts.
+Everything under `samples/` is synthetic. Keep real telemetry, credentials, private keys, and
+generated case folders out of Git.
 
-This is a breaking release. The React/Node interface, risk scores, confidence labels, queue
-routing, and legacy score settings are gone. Existing output consumers should validate the
-declared `2.4.0` output schema before adopting v2. See [CHANGELOG.md](CHANGELOG.md) for the full
-migration summary.
+## Version 2
 
-## Install
+v2 is a breaking release: the web interface, risk scores, confidence labels, and queue routing
+are gone, leaving the CLI and its artifacts. Generated JSON uses output schema `2.4.0`;
+consumers should check `schema_version`. See [CHANGELOG.md](CHANGELOG.md) for migration details.
 
-Requirements: Python 3.12+
+## Quick start: offline review
+
+Python 3.12 or later is required.
+
+### Windows PowerShell
 
 ```powershell
 git clone https://github.com/rasam08/wazuh-sysmon-triage.git
 Set-Location wazuh-sysmon-triage
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -U pip
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install .
+.\.venv\Scripts\triage.exe --version
 ```
 
-This package exposes a short command: `triage`.
+### macOS or Linux
 
-## Commands
+```bash
+git clone https://github.com/rasam08/wazuh-sysmon-triage.git
+cd wazuh-sysmon-triage
+python3.12 -m venv .venv
+./.venv/bin/python -m pip install --upgrade pip
+./.venv/bin/python -m pip install .
+./.venv/bin/triage --version
+```
 
-- `triage alert <wazuh-document-id>` — reconstruct bounded endpoint context around one Wazuh alert
-- `triage case <case-dir>` — summarize saved evidence, completeness, findings, and process pivots
-- `triage process <process-guid> --case-dir <case-dir>` — inspect one process and its focused evidence
-- `triage live` — query OpenSearch/Wazuh Indexer (online mode)
-- `triage offline` — replay NDJSON input (offline mode)
-- `triage run` — backward-compatible legacy command (shows migration hint)
+The rest of this README uses `triage` for readability. Activate the virtual environment first, or replace `triage` with `.\.venv\Scripts\triage.exe` on Windows or `./.venv/bin/triage` on macOS/Linux.
 
-## Time windows (cross-platform)
-
-No shell time math needed. Use one of:
-
-- `--last 15m|2h|24h|7d`
-- `--today`
-- `--yesterday`
-
-If `--start` and `--end` are provided, they override relative-time flags.
-
-## Quickstart
-
-1) Investigate one Wazuh alert (recommended analyst workflow):
+Run the smallest bundled example:
 
 ```powershell
-triage alert <opensearch-_id> --before 5m --after 10m
+triage offline --input-ndjson samples/incident_001/raw_hits.ndjson --case-id INCIDENT-001
+triage case out\INCIDENT-001
 ```
 
-The command resolves the alert's agent and occurrence time, preserves the trigger in
-`investigation_anchor.json`, and fails by default if contextual retrieval is truncated.
-By default the surrounding context comes from the Wazuh alert index. If Wazuh archives
-are indexed, collect fuller raw context without changing the triggering-alert lookup:
+That run creates `out/INCIDENT-001/` with a timeline, process tree, behavior findings, report, run metadata, and per-finding evidence bundles. No Wazuh server or network connection is needed.
 
-```powershell
-triage alert <opensearch-_id> --context-index-pattern "wazuh-archives-4.x-*"
-```
-
-Inspect the saved case and then pivot into a finding-linked process:
-
-```powershell
-triage case out\endpoint-chain
-triage process "{PROCESS-GUID}" --case-dir out\endpoint-chain
-triage process "{PROCESS-GUID}" --case-dir out\endpoint-chain --format json
-```
-
-2) Live, last 2h, SOC-style defaults:
-
-```powershell
-triage live --last 2h --case-id incident-live-soc
-```
-
-3) Live, today, alerts-only:
-
-```powershell
-triage live --today --alerts-only
-```
-
-4) Live, last 24h, full output (not alerts-only):
-
-```powershell
-triage live --last 24h --no-alerts-only --print-stats --case-id incident-24h-full
-```
-
-5) Offline from the P1 endpoint-chain sample:
+For a fuller endpoint chain:
 
 ```powershell
 triage offline --input-ndjson samples/incident_002_endpoint_chain/raw_hits.ndjson --case-id endpoint-chain
+triage case out\endpoint-chain
+triage process "{PROCESS-GUID}" --case-dir out\endpoint-chain
 ```
 
-P2 process-lifecycle and file-deletion evidence:
+Use `--format json` with `case` or `process` when another tool will consume the result.
+
+## Command map
+
+| Command | What it does |
+| --- | --- |
+| `triage offline` | Replays a local NDJSON file and writes a case bundle. |
+| `triage live` | Queries a bounded time window from Wazuh Indexer/OpenSearch. |
+| `triage alert <document-id>` | Looks up one Wazuh alert, derives its host and time, and collects nearby context. |
+| `triage case <case-dir>` | Summarizes an existing case without contacting Wazuh. |
+| `triage process <process-guid>` | Builds a focused view of one process from a saved case. |
+| `triage fetch` | Fetches raw hits and optional NDJSON without running the full analysis pipeline. |
+| `triage run` | Keeps the older combined interface working; new usage should prefer `live` or `offline`. |
+
+Run `triage <command> --help` for every option.
+
+## Connecting to Wazuh
+
+The CLI talks to the Wazuh Indexer/OpenSearch HTTP API, usually on port `9200`. It does not connect to Wazuh Dashboards on port `443`.
+
+Copy the example before editing it:
 
 ```powershell
-triage offline --input-ndjson samples/incident_003_file_cleanup/raw_hits.ndjson --case-id file-cleanup
-triage process "{CLEANUP-CMD}" --case-dir out\file-cleanup
+Copy-Item config.example.yaml config.local.yaml
 ```
 
-P3 remote-logon, service-install, and scheduled-task evidence:
+`config.local.yaml` is Git-ignored. Put the endpoint, read-only username, agent selector, and index pattern there; keep the password in the environment:
 
 ```powershell
-triage offline --input-ndjson samples/incident_004_remote_service_task/raw_hits.ndjson --case-id remote-activity
-triage case out\remote-activity
+$env:WAZUH_OS_PASSWORD = "<password>"
+triage live --config config.local.yaml --agent-name "windows-lab-01" --last 2h --case-id LAB-001
 ```
 
-The P3 result is deliberately a lead, not a lateral-movement verdict. It requires a
-same-target-host sequence within 15 minutes and either an exact logon-session ID match
-or an exact account match. A source host is named only when the recorded IP or host name
-maps to exactly one collected host.
+`config.local.yaml` is auto-loaded for `live`, `alert`, and `offline` when present. `.env.example` is a template only; the CLI does not read `.env` files.
 
-6) Live using profile:
+Precedence, highest first:
+
+- `host`, `user`: CLI flag, profile, config, environment;
+- `password`: CLI flag, then `WAZUH_OS_PASSWORD`. YAML passwords are ignored with a warning;
+- TLS verification: CLI flag, `WAZUH_OS_VERIFY_TLS`, profile, config, profile default; and
+- everything else (`out_dir`, `index_pattern`, agent selectors): CLI flag, profile, config, built-in default.
+
+The `soc` profile ships the placeholder agent name `anon`; override it with `--agent-name`/`--agent-id` or in `config.local.yaml`. The `lab` profile disables certificate verification and warns; use it only in an isolated lab.
+
+`live` defaults to the last two hours. Use `--last 15m|2h|24h|7d`, `--today`, `--yesterday`, or an explicit `--start`/`--end` pair, which overrides the relative flags. Windows are UTC.
+
+### Alert-centered workflow
+
+Given the OpenSearch `_id` of a Wazuh alert:
 
 ```powershell
-triage live --profile soc --last 24h --agent-name anon --no-verify-tls
+triage alert <opensearch-_id> --before 5m --after 10m --case-id ALERT-001
 ```
 
-7) Override profile values on CLI:
+The exact trigger is saved in `investigation_anchor.json`. Context truncation fails by default so an incomplete collection is not presented as complete.
+
+Context comes from the alert index by default, which misses events that did not trigger a Wazuh rule. If archives are indexed, keep the lookup on the alert index and draw context from archives:
 
 ```powershell
-triage live --profile soc --last 2h --no-alerts-only --quarantine-drops
+triage alert <opensearch-_id> --context-index-pattern "wazuh-archives-4.x-*" --case-id ALERT-001
 ```
 
-8) Explicit start/end (overrides `--last`):
+Wazuh archives carry storage and retention cost. Live-lab requirements are in [docs/LAB_SETUP.md](docs/LAB_SETUP.md) and [docs/PROFESSIONAL_ACCEPTANCE_PLAN.md](docs/PROFESSIONAL_ACCEPTANCE_PLAN.md).
+
+### Configuration check
+
+Resolve the selected config and print the query without contacting Wazuh:
 
 ```powershell
-triage live --last 24h --start 2026-02-10T00:00:00Z --end 2026-02-10T02:00:00Z --case-id incident-explicit
+triage live --dry-run-query --agent-name "windows-lab-01" --last 2h
 ```
 
-9) Legacy compatibility:
+This checks query construction only, not credentials, TLS, index permissions, or field mappings.
+
+## Reading findings
+
+Each finding carries a kind (`observed_pattern`, `correlated_pattern`, `aggregate_pattern`, or `hypothesis`), an evidence-strength label, and source references. Evidence strength describes support for the stated relationship, not the probability that the activity is malicious.
+
+A remote logon followed by service creation is worth reviewing, but routine administration produces the same sequence. The tool reports it as a bounded lead rather than calling it lateral movement.
+
+Use `--explain` to show why findings matched:
 
 ```powershell
-python -m wazuh_sysmon_triage run --input-ndjson samples/incident_001/raw_hits.ndjson --case-id INCIDENT-001
+triage offline --input-ndjson samples/scenario_gym/encoded_powershell.ndjson --explain
 ```
 
-## Offline input integrity
+Targeted suppression rules can remove known environment noise. Suppressed counts and matched rule names remain visible in the artifacts.
 
-Offline NDJSON is read as bounded binary records. A malformed JSON line, invalid UTF-8,
-non-object JSON value, or oversized record is rejected independently while valid records
-before and after it continue through the investigation.
+## Bad or incomplete offline input
+
+Offline NDJSON is read one bounded binary record at a time. Malformed JSON, invalid UTF-8, non-object JSON, and oversized records are rejected individually while valid records continue through the pipeline.
 
 ```powershell
 triage offline --input-ndjson capture.ndjson --max-record-bytes 4194304 --quarantine-drops
 triage offline --input-ndjson capture.ndjson --fail-on-input-errors
 ```
 
-`--max-events` counts accepted JSON objects, not physical or rejected lines. Input rejection
-metadata is written to `quarantine.ndjson`; raw rejected text is included only with
-`--quarantine-drops`, capped at a 4 KiB preview, and sanitized when `--sanitize` is active.
-The reader stops after 10,000 rejected records to bound quarantine growth.
-`--fail-on-input-errors` still writes the normal case artifacts and then exits with code 5.
+Rejection metadata goes to `quarantine.ndjson`. Raw rejected text is included only with `--quarantine-drops`, is capped at a 4 KiB preview, and is sanitized when `--sanitize` is active. Strict mode still writes the case bundle and then exits with code `5` if any input record was rejected.
 
-## Profiles
+## Output and evidence handling
 
-Config precedence:
+Each run writes a case below the output root (default `./out`). Common artifacts are:
 
-`base defaults <- selected profile <- explicit CLI flags`
+- `timeline.csv`
+- `process_tree.json`
+- `alerts.csv`
+- `report.md`
+- `alert_A###_bundle.json`
+- `investigation_anchor.json` for `triage alert`
+- `query.json`, `stats.json`, `run_metadata.json`, and `run.log.ndjson`
+- `quarantine.ndjson` when input or normalization drops need to be recorded
 
-See `config.example.yaml` for `active_profile` and `profiles:` examples (`soc`, `dev`, `lab`).
+The output root also keeps `telemetry_history.ndjson` and `telemetry_summary.json` so repeated runs can be reviewed for success rate and stage timing.
 
-## Evidence-based behavior findings
+Real telemetry exposes usernames, command lines, paths, internal hosts, and network addresses. Restrict access to case directories, and use `--sanitize` before sharing. Sanitization reduces obvious exposure; it does not replace reviewing evidence before publication.
 
-- Local rules emit observed or correlated behavior with an explicit reason.
-- Findings carry `finding_kind`, `evidence_strength`, `host_key`, and source references.
-- Windows Security evidence covers remote logons (4624 types 3/10), service installs
-  (4697), and scheduled-task creation (4698), alongside the supported Sysmon evidence.
-- Supported evidence includes process creation, network connections, file creation,
-  process termination, process access, registry changes, DNS queries, and file deletion
-  (Sysmon 1, 3, 5, 10–14, 22, 23, and 26).
-- Numeric risk scores, confidence labels, and automatic queue routing are intentionally absent.
-- Use targeted suppression rules for known environment noise; suppressed counts remain visible.
+See [docs/OUTPUTS.md](docs/OUTPUTS.md) for the artifact guide and [SECURITY.md](SECURITY.md) for private vulnerability reporting.
 
-Examples:
+## Container use
+
+The Dockerfile is CLI-only: no web server, no exposed port. No prebuilt image is published.
 
 ```powershell
-triage live --profile soc --last 24h --explain
-triage offline --input-ndjson samples/scenario_gym/encoded_powershell.ndjson --explain-alert A001
+docker build -t wazuh-sysmon-triage:local .
+docker run --rm wazuh-sysmon-triage:local --version
+docker run --rm wazuh-sysmon-triage:local --help
 ```
 
-## Config auto-load and precedence
-
-- `triage live` and `triage offline` automatically use `config.local.yaml` when present.
-- Override auto-load with `--config <path>`.
-- Connection field precedence is:
-  - `host`, `user`: CLI > profile/config > environment (`WAZUH_OS_HOST`, `WAZUH_OS_USER`)
-  - `password`: CLI > environment (`WAZUH_OS_PASSWORD`) (inline config passwords are ignored and warned)
-- TLS field precedence is:
-  - `--verify-tls/--no-verify-tls` CLI flag > `WAZUH_OS_VERIFY_TLS` > profile/config > profile default
-- `lab` profile defaults to `verify_tls=false` when no explicit override is provided.
-
-## Output behavior
-
-- Runs write to case folders under output root.
-- If `--case-id` is omitted, a safe auto-generated case ID is used.
-- Optional retention pruning can remove old case folders by age/size (`artifact_retention` in config).
-- Typical artifacts:
-  - `timeline.csv`
-  - `process_tree.json`
-  - `alerts.csv`
-  - `report.md`
-  - `alert_A###_bundle.json` (per alert)
-  - `investigation_anchor.json` (`triage alert` runs)
-  - `query.json`, `stats.json`, `run_metadata.json`, `run.log.ndjson`
-  - `quarantine.ndjson` (input rejection metadata; raw text is opt-in)
-  - `telemetry_history.ndjson`, `telemetry_summary.json` (run success rate, stage p50/p95, top failures)
-
-## Process status lines
-
-During runs, the CLI prints short stage updates, for example:
-
-- `[process] fetch (live): querying opensearch...`
-- `[process] normalize: parsing 128 hits...`
-- `[process] correlate: building graph...`
-- `[process] detect: evaluating transparent behavior rules...`
-- `[process] render: writing <count> outputs...`
-
-Structured JSON logging remains intact in `run.log.ndjson`.
-
-## Troubleshooting
-
-- **TLS verify failures**: use `--no-verify-tls` in lab environments.
-- **Missing agent selector**: for live mode, provide `--agent-name` or `--agent-id` (or set in profile/config).
-- **No results**: widen time window (`--last 24h`), confirm index pattern and agent match.
-- **Too noisy**: add narrow, reviewable `suppressions.rules`; avoid broad rules that hide unrelated evidence.
-
-## Documentation
-
-- [Lab setup](docs/LAB_SETUP.md)
-- [Reproducing results](docs/REPRODUCE.md)
-- [Output artifacts](docs/OUTPUTS.md)
-- [Output schema compatibility](docs/OUTPUT_SCHEMA_COMPAT.md)
-- [Signal and evidence model](docs/SIGNAL_MODEL.md)
-- [Scenario gym](docs/SCENARIO_GYM.md)
-- [Performance qualification](docs/PERFORMANCE.md)
-- [Troubleshooting](docs/TROUBLESHOOTING.md)
-- [Project blueprint](docs/PROJECT_BLUEPRINT.md)
-- [Professional acceptance plan](docs/PROFESSIONAL_ACCEPTANCE_PLAN.md)
-- [Publishing checklist](docs/PUBLISHING.md)
-- [Security policy](SECURITY.md)
-
-### Environment Variables
-
-See [docs/ENV_VARS.md](docs/ENV_VARS.md) for the complete environment variable reference.
-
-## Security and evidence handling
-
-Raw telemetry and generated artifacts can contain hostnames, usernames, paths, command lines,
-and network addresses. Keep real evidence outside the repository, restrict access to output
-directories, and use `--sanitize` before sharing artifacts when appropriate. Report security
-issues through the process in [SECURITY.md](SECURITY.md).
-
-## Running tests
+Create `out/` first, then mount it when replaying a bundled sample:
 
 ```powershell
-python -m pytest -q
-```
-
-Resource-intensive gates are opt-in locally:
-
-```powershell
-$env:RUN_PERFORMANCE = "1"
-python -m pytest -q tests/performance/test_offline_scale.py
-```
-
-## Containerized CLI
-
-The container contains only the Python CLI. It does not expose a web server or network port.
-
-```powershell
-docker build -t wazuh-sysmon-triage:latest .
-docker run --rm wazuh-sysmon-triage:latest --help
-```
-
-Replay the bundled offline sample and persist the output:
-
-```powershell
-docker run --rm -v ${PWD}/out:/app/out wazuh-sysmon-triage:latest `
+New-Item -ItemType Directory -Force out | Out-Null
+docker run --rm -v "${PWD}\out:/app/out" wazuh-sysmon-triage:local `
   offline --input-ndjson /app/samples/incident_001/raw_hits.ndjson `
   --case-id INCIDENT-001 --out-dir /app/out
 ```
 
-For live mode, pass the Wazuh Indexer connection through environment variables:
+The runtime image runs as the unprivileged `triage` user. On Linux, make sure the mounted output directory is writable by the container user. More examples are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
+## Development and release checks
+
+Install the development tools listed in [CONTRIBUTING.md](CONTRIBUTING.md), then run:
 
 ```powershell
-docker run --rm -v ${PWD}/out:/app/out `
-  -e WAZUH_OS_HOST -e WAZUH_OS_USER -e WAZUH_OS_PASSWORD -e WAZUH_OS_VERIFY_TLS `
-  wazuh-sysmon-triage:latest live --last 2h --agent-name anon --out-dir /app/out
+python -m ruff check src tests scripts
+python -m mypy src
+python -m pytest -q
+python scripts/check_markdown_links.py
 ```
 
-## Release Gate And Task Aliases
-
-One-click fail-fast release gate:
+The local convenience gate runs tests, documentation links, and a no-network live-query dry run:
 
 ```powershell
 .\scripts\release_gate.ps1
 ```
 
-Task aliases (PowerShell):
+Performance qualification and the release process are described in [docs/PERFORMANCE.md](docs/PERFORMANCE.md) and [docs/PUBLISHING.md](docs/PUBLISHING.md).
 
-```powershell
-.\scripts\tasks.ps1 -Task test
-.\scripts\tasks.ps1 -Task build
-.\scripts\tasks.ps1 -Task smoke-live
-.\scripts\tasks.ps1 -Task smoke-offline
-.\scripts\tasks.ps1 -Task release-gate
-```
+## Documentation map
 
-Task aliases (make):
+Start here:
 
-```bash
-make test
-make build
-make smoke-live
-make smoke-offline
-make release-gate
-```
+- [Installation and deployment](docs/DEPLOYMENT.md)
+- [Reproducing bundled results](docs/REPRODUCE.md)
+- [Live lab setup](docs/LAB_SETUP.md)
+- [Troubleshooting](docs/TROUBLESHOOTING.md)
+- [Operational runbooks](docs/runbooks/)
+- [Environment variables](docs/ENV_VARS.md)
+
+Understand the evidence:
+
+- [Output artifacts](docs/OUTPUTS.md)
+- [Output schema compatibility](docs/OUTPUT_SCHEMA_COMPAT.md)
+- [Finding and evidence model](docs/SIGNAL_MODEL.md)
+- [Scenario and acceptance fixtures](docs/SCENARIO_GYM.md)
+
+Maintainer references:
+
+- [Project structure](docs/PROJECT_BLUEPRINT.md)
+- [Performance qualification](docs/PERFORMANCE.md)
+- [Acceptance status and pending live work](docs/PROFESSIONAL_ACCEPTANCE_PLAN.md)
+- [Publishing and release process](docs/PUBLISHING.md)
+- [Current branch protection](docs/BRANCH_PROTECTION.md)
 
 ## AI-assisted development
 
@@ -343,4 +272,4 @@ Because AI-assisted implementation can introduce subtle errors, the project emph
 
 ## License
 
-MIT. See LICENSE.
+MIT. See [LICENSE](LICENSE).

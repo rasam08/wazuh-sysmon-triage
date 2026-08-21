@@ -1,75 +1,112 @@
-# Lab setup (minimal)
+# Live lab setup
 
-This project is designed to be reproducible in a small lab and reviewable without any lab via the offline NDJSON sample.
+You do not need a lab to review the project: the offline samples and acceptance corpus exercise the full local pipeline. A lab is only needed to qualify the live path from a Windows endpoint through Wazuh and back into this CLI.
 
-## Option A: Offline-only (recommended for reviewers)
+That live qualification has not been run. This document describes what the trial requires; it does not claim any Wazuh/Sysmon version has passed.
 
-No infrastructure required.
+## What the trial needs
 
-- Install Python 3.12+
-- Run the offline quickstart in [../README.md](../README.md)
+### A disposable Windows endpoint
 
-## Option B: Disposable online lab (Wazuh + Sysmon + OpenSearch)
+- A Windows VM or separate lab machine with administrator access.
+- Sysmon installed with a fixed, recorded XML configuration.
+- A Wazuh agent with a unique agent name.
+- Collection of `Microsoft-Windows-Sysmon/Operational`.
+- Windows Security auditing for any 4624, 4697, or 4698 checks included in the trial.
+- A snapshot or other easy rollback point.
 
-Do not use a production Wazuh deployment for qualification. Snapshot the lab before testing,
-synchronize both systems' clocks, and record the exact Wazuh, agent, Sysmon, and Sysmon
-configuration versions.
+Use a disposable endpoint rather than a production workstation. Some full-coverage checks require administrator-only actions such as creating a temporary service or scheduled task.
 
-### Minimum components
+### A Wazuh server and Indexer
 
-1. Windows endpoint
-   - A separate Windows VM with administrator access.
-   - Sysmon installed with a fixed XML configuration covering the required event types.
-   - Wazuh agent installed, uniquely named, and configured to collect
-     `Microsoft-Windows-Sysmon/Operational`.
+- A non-production Wazuh deployment with the manager and Indexer/OpenSearch available.
+- The alert index pattern, commonly `wazuh-alerts-4.x-*`.
+- Indexed archives, commonly `wazuh-archives-4.x-*`, if the trial will verify context that did not trigger a Wazuh rule.
+- A retention and cleanup plan before archives are enabled.
+- Enough CPU, memory, and storage for the chosen Wazuh deployment. A practical single-node lab starting point is 4 CPU cores, 8 GB RAM, and 50 GB of free storage, but the Wazuh deployment guidance should be treated as authoritative for the version being installed.
 
-2. Wazuh server / indexer
-   - A single-node lab with at least 4 CPU cores, 8 GB RAM, and 50 GB storage.
-   - Wazuh Indexer (OpenSearch) reachable via the OpenSearch HTTP API.
-   - Index pattern containing alerts (commonly `wazuh-alerts-4.x-*`).
-   - Archives explicitly enabled and indexed as `wazuh-archives-4.x-*` for non-alert context.
+Alerts and archives are not interchangeable. Alert indices only contain events that produced Wazuh alerts; archive indices can provide the fuller surrounding stream when archive indexing is enabled.
 
-3. Triage workstation
-   - Python 3.12+ and this package installed.
-   - A dedicated Indexer account with read access only to the required alert and archive indices.
-   - The Indexer CA certificate, or an explicitly documented disposable-lab TLS exception.
+### A triage workstation
 
-### Connectivity expectation
+- Python 3.12+ or a locally built project container.
+- This repository/package installed.
+- A dedicated Indexer account with read access only to the required alert and archive patterns.
+- The Indexer CA certificate, or a documented TLS exception limited to the disposable lab.
+- A safe location outside Git for raw captures and generated case bundles.
 
-Wazuh commonly exposes:
+Synchronize clocks across the Windows endpoint, Wazuh components, and triage workstation. Record the timezone and exact versions before generating evidence.
 
-- Dashboards/UI on `:443`
-- Indexer API (OpenSearch HTTP) on `:9200`
-- Agent event transport on `:1514`
-- Agent enrollment on `:1515`
+## Network path
 
-This tool must talk to the Indexer API endpoint, not the UI.
+Common Wazuh ports are:
 
-If `:9200` is only reachable from the server itself, use an SSH local port forward. For
-example, expose it locally as `9920` while leaving the remote default unchanged:
+- `443`: Wazuh Dashboards
+- `9200`: Wazuh Indexer/OpenSearch HTTP API
+- `1514`: agent event transport
+- `1515`: agent enrollment
+
+This CLI needs the Indexer API, not Dashboards. A redirect to `/app/login` or an HTML login page usually means `WAZUH_OS_HOST` points to the wrong service.
+
+If the Indexer listens only on the Wazuh host, use an SSH tunnel instead of exposing it broadly:
 
 ```powershell
 ssh -N -L 9920:localhost:9200 <user>@<wazuh-indexer>
-$env:WAZUH_OS_HOST = "https://127.0.0.1:9920"
 ```
 
-### Data generation (benign)
+In a second terminal:
 
-You do not need “attack simulation” to validate the tool.
+```powershell
+$env:WAZUH_OS_HOST = "https://127.0.0.1:9920"
+$env:WAZUH_OS_USER = "triage-readonly"
+$env:WAZUH_OS_PASSWORD = "<password>"
+```
 
-A simple way to generate Sysmon events:
+`9920` is only the local end of this example tunnel; Wazuh Indexer still uses `9200` on the remote side.
 
-- EID 1 (Process Create): open `cmd.exe` or `powershell.exe` and run a few commands.
-- EID 11 (File Create): create a file (e.g., `echo test > C:\Temp\triage_test.txt`).
-- EID 3 (Network Connect): make an outbound connection (e.g., `curl https://example.com` or open a browser).
+## Prepare the CLI without connecting
 
-The tool is designed to handle normal background noise (Defender, browser traffic, IDE
-processes) and supports configurable suppression rules in `config.local.yaml` for
-environment-specific tuning.
+Copy and edit the example:
 
-See the [professional acceptance plan](PROFESSIONAL_ACCEPTANCE_PLAN.md) for the full live
-qualification boundary and pass criteria. Enabling Wazuh archives increases storage consumption,
-so define retention and cleanup before collecting trial data.
+```powershell
+Copy-Item config.example.yaml config.local.yaml
+triage live --config config.local.yaml --agent-name "windows-lab-01" --last 2h --dry-run-query
+```
+
+The dry run checks resolved settings and query construction. It does not verify network reachability, credentials, certificates, permissions, index existence, Wazuh field mappings, or event flow.
+
+Keep certificate verification enabled when possible. `--no-verify-tls` is acceptable only as an explicit, temporary exception in this isolated lab.
+
+## Generate harmless smoke-test telemetry
+
+A basic connectivity run does not need attack simulation:
+
+- Sysmon 1: open `cmd.exe` or PowerShell and run a recognizable benign command.
+- Sysmon 11: create a named file under a temporary lab directory.
+- Sysmon 3: make an outbound request to `https://example.com`.
+- Sysmon 5: close the process used for the test.
+
+Give the events time to move through the agent, manager, and Indexer. Then query a small window with the real agent selector and a low event/page cap.
+
+Full qualification also needs safe, named exercises for registry, DNS, process access, file deletion, remote logon, service creation, and scheduled-task creation. Those should be planned for the disposable VM, reviewed before execution, and cleaned up immediately afterward. Ordinary background activity must not be presented as malicious merely because it matches a correlation rule.
+
+## What to record
+
+The eventual qualification bundle should record:
+
+- Wazuh manager, Indexer, agent, and Sysmon versions;
+- the Sysmon configuration hash;
+- tested alert and archive index patterns;
+- CLI version and output schema;
+- event IDs actually observed in each index;
+- whether PIT pagination or scroll fallback was exercised;
+- authentication, TLS, missing-index, timeout, and truncation results;
+- sanitized artifact hashes and a pass/fail matrix; and
+- cleanup confirmation.
+
+Do not include credentials, private keys, or unsanitized production identities in that bundle.
+
+The complete remaining pass criteria are in [PROFESSIONAL_ACCEPTANCE_PLAN.md](PROFESSIONAL_ACCEPTANCE_PLAN.md).
 
 Official references:
 

@@ -1,82 +1,94 @@
 # Troubleshooting
 
-## 1) "Redirect to /app/login" or unexpected HTML responses
+## The response is HTML or redirects to `/app/login`
 
-Cause: The host points to Wazuh Dashboards/UI (often `:443`) instead of the Indexer API.
+The host is probably Wazuh Dashboards (often port `443`), not the Indexer API.
 
-Fix: Point `WAZUH_OS_HOST` / `--host` to the Indexer API endpoint. Wazuh uses `:9200`
-by default; `:9920` is only a local or deployment-specific remap.
+Point `WAZUH_OS_HOST` or `--host` to the Wazuh Indexer/OpenSearch HTTP endpoint, commonly `https://<host>:9200`. Port `9920` is only a local/deployment-specific remap such as the SSH tunnel below.
 
-## 2) TLS certificate errors
+## TLS certificate verification fails
 
-Cause: Self-signed or lab certificates.
+Use the Indexer CA certificate when possible. `--no-verify-tls` is limited to an isolated disposable lab and prints a warning because it exposes the connection to man-in-the-middle attacks.
 
-Fix: Prefer the Indexer CA certificate. Use `--no-verify-tls` only for an isolated,
-disposable lab and document the exception.
+Check whether a stale `WAZUH_OS_VERIFY_TLS` value is overriding the YAML profile before changing the config.
 
-## 3) Connection refused to :9200
+## Port 9200 refuses the connection
 
-Cause: Indexer API bound to localhost on the server.
-
-Fix: Use an SSH local port forward:
+The Indexer may listen only on the Wazuh host. Create a local tunnel:
 
 ```powershell
 ssh -N -L 9920:localhost:9200 <user>@<wazuh-indexer>
 ```
 
-Then set:
+Then, in another terminal:
 
 ```powershell
 $env:WAZUH_OS_HOST = "https://127.0.0.1:9920"
 ```
 
-## 4) Authentication failures
+Keep the SSH session open for the entire query.
 
-Fix:
+## Authentication or authorization fails
 
-- Verify `WAZUH_OS_USER` / `WAZUH_OS_PASSWORD`
-- Confirm the account has read access to the alert indices matching your `--index-pattern` and,
-  when used, the archive indices matching `--context-index-pattern`
+- Verify `WAZUH_OS_USER` and `WAZUH_OS_PASSWORD` in the same shell that starts the CLI.
+- Confirm the account has read permission for `--index-pattern`.
+- For `triage alert --context-index-pattern ...`, confirm it can also read that archive/custom pattern.
+- Do not put the password in YAML; the CLI ignores inline config passwords and warns.
 
-## 5) Unexpected host/user/TLS settings
+## The effective config is surprising
 
-Cause: Effective settings may come from different sources (CLI flags, profile/config, environment).
+`live`, `alert`, and `offline` auto-load `config.local.yaml` from the current directory. The CLI prints a short config line when it does this. An explicit `--config` path wins over auto-loading.
 
-Notes:
+Precedence is:
 
-- `triage live` and `triage offline` auto-load `config.local.yaml` if present.
-- Runtime prints: `[process] config: using config.local.yaml (override with --config)` when this occurs.
-- Precedence is:
-	- `host`, `user`: CLI > profile/config > environment
-	- `password`: CLI > environment; inline configuration passwords are ignored and warned
+- host/user: CLI, selected profile, base config, environment;
+- password: CLI, environment; and
+- TLS verification: CLI, environment, selected profile, base config, profile default.
 
-Fix:
+The built-in `soc` profile includes the placeholder agent name `anon`. Pass a real `--agent-name`/`--agent-id`, or set `agent_name` in your config file or selected profile.
 
-- Pass explicit flags (`--host`, `--user`, `--no-verify-tls`) for one-off runs, or
-- set them in your selected profile/config and remove stale environment variables.
+Use a no-network dry run to inspect the resolved query:
 
-## 6) No results returned
+```powershell
+triage live --config config.local.yaml --agent-name "windows-lab-01" --last 2h --dry-run-query
+```
 
-Checklist:
+A successful dry run does not test reachability, credentials, permissions, certificates, or Wazuh mappings.
 
-- Confirm the time window (`--start`, `--end`) contains events.
-- Confirm the agent selector (`--agent-name` or `--agent-id`) matches the endpoint.
-- Confirm the index pattern (`--index-pattern`) matches your Wazuh alert indices.
-- Try widening the time window to validate connectivity and filtering.
+## A live query returns no events
 
-## 7) Pagination / PIT
+- Widen the UTC window with `--last 24h`.
+- Confirm the real agent selector and whether `--agent-mode all` is requiring both an ID and name.
+- Confirm `--index-pattern` matches the installed Wazuh index names.
+- Check Wazuh itself to make sure the event reached the Indexer.
+- Remember that alert indices omit events that did not trigger a rule.
 
-Some indexer builds do not support `/_pit`. The tool should fall back automatically.
-If you see unexpected truncation, consider:
+If alert-centered context is too sparse and archives are enabled/indexed, use:
 
-- Using `--max-events` / `--max-pages`
-- Using `--fail-on-truncation` when you need strict completeness
+```powershell
+triage alert <opensearch-_id> --context-index-pattern "wazuh-archives-4.x-*"
+```
 
-## 8) Too many alerts from normal background activity
+## Results are truncated
 
-Cause: Environment noise differs between lab, dev, and production endpoints.
+The tool stops at `--max-events` or `--max-pages` and records the reason. Use `--fail-on-truncation` when an incomplete result must be a non-zero outcome.
 
-Fix:
+Indexer builds without point-in-time support should fall back to scroll automatically. A fallback is not permission to ignore the recorded truncation state.
 
-- Add targeted `suppressions.rules` in config (image glob/regex, user, destination class, ports).
-- Use `suppressions.allowlist_override` to keep high-interest processes visible even when broad suppressions exist.
+## Offline input is rejected
+
+Look at `stats.json`/`run_metadata.json` `input_quality` and `quarantine.ndjson`. Stable reasons are `invalid_utf8`, `malformed_json`, `non_object_json`, and `record_too_large`.
+
+`--quarantine-drops` includes a bounded raw preview. Treat it as sensitive. `--fail-on-input-errors` writes the normal case and then exits with code `5` if any input record was rejected.
+
+## Normal endpoint activity produces too many findings
+
+Add narrow `suppressions.rules` for known local behavior. Prefer a specific image/user/destination rule over a broad allowlist, and use `allowlist_override` when an important process must stay visible.
+
+Suppression affects local findings, not whether the underlying event remains available in the timeline/process model. Review suppression counts after every tuning change.
+
+## Artifacts cannot be written
+
+Check free space and permissions for `--out-dir`. The Docker image runs as an unprivileged user, so Linux bind mounts must be writable by that user.
+
+Do not delete old case directories casually. Archive or remove them according to the evidence-retention policy, then rerun a small offline sample to confirm writes work.

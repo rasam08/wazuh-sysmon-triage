@@ -1,78 +1,58 @@
-# Scenario Gym
+# Synthetic scenarios
 
-This repository currently ships **9** deterministic synthetic scenarios under `samples/scenario_gym/`.
+The repository has two fixture collections. They answer different questions:
 
-## Included scenarios
+- `samples/scenario_gym/` contains nine small signal examples for quick rule smoke tests.
+- `samples/acceptance/` contains nine manifest-driven cases that check conclusions, non-conclusions, missing evidence, ordering, and noise.
 
-1. `encoded_powershell.ndjson`
-2. `schtasks_persistence.ndjson`
-3. `lolbin_outbound.ndjson`
-4. `advanced_injection_escalated.ndjson`
-5. `obfuscated_powershell_critical_combo.ndjson`
-6. `suspicious_path_outbound.ndjson`
-7. `rundll32_outbound_public.ndjson`
-8. `schtasks_persistence_cmd_dropper.ndjson`
-9. `suppression_proof.ndjson`
+None of these files came from a production environment.
 
-## Expected outcome
+## Small scenario gym
 
-- Scenarios 1-8: emit the expected evidence-backed behavior finding.
-- `suppression_proof.ndjson`: emits **zero** alerts by design (allowlist/suppression proof case).
+| File | Intended check |
+| --- | --- |
+| `encoded_powershell.ndjson` | Encoded/download-oriented PowerShell behavior |
+| `schtasks_persistence.ndjson` | Scheduled-task creation pattern |
+| `lolbin_outbound.ndjson` | A configured LOLBin with public network activity |
+| `advanced_injection_escalated.ndjson` | Process-access/reflection context |
+| `obfuscated_powershell_critical_combo.ndjson` | Multiple PowerShell contributors in one small case |
+| `suspicious_path_outbound.ndjson` | Network activity from a user-writable path |
+| `rundll32_outbound_public.ndjson` | `rundll32.exe` with a public destination |
+| `schtasks_persistence_cmd_dropper.ndjson` | Scheduled task with interpreter/dropper context |
+| `suppression_proof.ndjson` | Zero findings by design, proving suppression behavior |
 
-## Quick run
+Run one:
 
 ```powershell
-$py = ".\.venv\Scripts\python.exe"
-$base = "samples/scenario_gym"
-
-& $py -m wazuh_sysmon_triage offline --input-ndjson "$base/encoded_powershell.ndjson" --out-dir "out/scenario-encoded" --case-id "scenario-encoded"
-& $py -m wazuh_sysmon_triage offline --input-ndjson "$base/schtasks_persistence.ndjson" --out-dir "out/scenario-schtasks" --case-id "scenario-schtasks"
-& $py -m wazuh_sysmon_triage offline --input-ndjson "$base/lolbin_outbound.ndjson" --out-dir "out/scenario-lolbin" --case-id "scenario-lolbin"
-& $py -m wazuh_sysmon_triage offline --input-ndjson "$base/advanced_injection_escalated.ndjson" --out-dir "out/scenario-advanced-injection" --case-id "scenario-advanced-injection"
-& $py -m wazuh_sysmon_triage offline --input-ndjson "$base/obfuscated_powershell_critical_combo.ndjson" --out-dir "out/scenario-obf-critical" --case-id "scenario-obf-critical"
-& $py -m wazuh_sysmon_triage offline --input-ndjson "$base/suspicious_path_outbound.ndjson" --out-dir "out/scenario-suspicious-path" --case-id "scenario-suspicious-path"
-& $py -m wazuh_sysmon_triage offline --input-ndjson "$base/rundll32_outbound_public.ndjson" --out-dir "out/scenario-rundll32" --case-id "scenario-rundll32"
-& $py -m wazuh_sysmon_triage offline --input-ndjson "$base/schtasks_persistence_cmd_dropper.ndjson" --out-dir "out/scenario-schtasks-cmd-dropper" --case-id "scenario-schtasks-cmd-dropper"
-& $py -m wazuh_sysmon_triage offline --input-ndjson "$base/suppression_proof.ndjson" --out-dir "out/scenario-suppression-proof" --case-id "scenario-suppression-proof"
+triage offline --input-ndjson samples/scenario_gym/encoded_powershell.ndjson --case-id scenario-encoded --explain
 ```
 
-## QA hooks
+Scenario-gym timestamps are automatically shifted near the current UTC time during replay. The relative spacing stays intact, which keeps time-sensitive examples useful without hand-editing their source files. This rebasing applies only to paths recognized as `scenario_gym` inputs.
 
-- `tests/test_scenario_gym.py::test_scenario_gym_minimum_signal_threshold`
-- `tests/test_scenario_gym.py::test_scenario_gym_suppression_proof_emits_no_alerts`
+The focused checks live in `tests/test_scenario_gym.py`.
 
-## Professional acceptance corpus
+## Acceptance corpus
 
-`samples/acceptance/` is the conclusion-oriented corpus. Unlike the compact scenario gym,
-each scenario has an `expected.yaml` manifest that asserts required and forbidden findings,
-finding kind and evidence strength, unknowns, relationship minima, exact input/drop counts,
-and provenance.
+Each directory under `samples/acceptance/` has:
 
-The corpus covers:
+- `README.md` with the human reason the scenario exists;
+- `expected.yaml` with required and forbidden findings, evidence strength, unknowns, relationship minimums, exact counts, and provenance; and
+- `raw_hits.ndjson`, except for the large noisy-workstation input generated on demand.
 
-1. benign administrative PowerShell;
-2. benign software installation;
-3. benign RMM maintenance;
-4. PowerShell download and execution context;
-5. LSASS process access with source context;
-6. Run-key persistence evidence;
-7. remote service and scheduled-task creation;
-8. duplicate, malformed, unsupported, missing-parent, invalid-time, and out-of-order data; and
-9. a deterministic noisy workstation with one injected chain.
+The corpus covers benign administrative PowerShell, benign installation, legitimate remote maintenance, PowerShell download/execution, LSASS access, a Run-key change, remote service/task activity, degraded telemetry, and a noisy workstation.
 
-Regenerate the checked-in fixtures and manifests with:
+Regenerate the checked-in corpus:
 
 ```powershell
 python scripts/generate_acceptance_corpus.py
 ```
 
-The noisy raw file is intentionally not committed. Generate it when needed:
+Generate the large noisy raw file when needed:
 
 ```powershell
 python scripts/generate_acceptance_corpus.py --include-noisy-raw --noisy-events 5000
 ```
 
-Re-running the generator without `--include-noisy-raw` removes that generated large file.
-The fixed seed, event mix, injected chain, and expected conclusions remain in its manifest.
-`tests/test_acceptance_corpus.py` validates every manifest before comparing conclusions,
-source references, ordering, noise accounting, and forbidden findings.
+That large NDJSON file is ignored by Git. Running the generator later without `--include-noisy-raw` removes it and restores the normal lightweight checkout.
+
+`tests/test_acceptance_corpus.py` validates every manifest before comparing findings, source references, ordering, unknowns, input quality, and forbidden conclusions.

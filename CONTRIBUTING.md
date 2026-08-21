@@ -1,80 +1,75 @@
 # Contributing
 
-## Scope
+Thanks for taking an interest in the project. The most useful contributions are usually small, testable changes that make the evidence clearer without quietly changing what an existing case bundle means.
 
-This repository contains:
+## Before you start
 
-- Python triage engine in `src/wazuh_sysmon_triage`
-- CI and release automation in `.github/workflows`
+The maintained product is the Python CLI in `src/wazuh_sysmon_triage/`. The old React/Node interface is part of the repository history, not the current application.
 
-All contributions must preserve CLI and artifact compatibility unless explicitly approved as a breaking change.
+Please open an issue before starting a large feature or a breaking CLI/schema change. Bug fixes, focused documentation corrections, new synthetic fixtures, and narrow parser improvements can usually go straight to a pull request.
 
-## Local Setup
+Never include real incident telemetry, credentials, internal hostnames, or organization-specific identities in a contribution.
 
-1. Install Python 3.12.
-2. Install Python deps:
+## Local setup
+
+Python 3.12 or later is required. From the repository root:
 
 ```powershell
-python -m pip install --upgrade pip
-python -m pip install -e .
-python -m pip install build twine pytest pytest-cov ruff mypy types-PyYAML
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -e .
+.\.venv\Scripts\python.exe -m pip install build twine pytest pytest-cov ruff mypy types-PyYAML vulture bandit pip-audit detect-secrets pre-commit
 ```
 
-## Development Workflow
+On macOS/Linux, use `./.venv/bin/python` instead of the Windows interpreter path.
 
-1. Create a focused branch from `main`.
-2. Keep changes additive for CLI and artifact contracts where possible.
-3. Add tests for behavior changes (unit/integration as applicable).
-4. Update docs when runtime behavior, environment variables, or output contracts change.
+## Working on a change
 
-## Required Validation Before PR
+1. Branch from the latest `main`.
+2. Keep the change focused and preserve CLI/output contracts unless the change is intentionally breaking.
+3. Add a unit, integration, or fixture test for behavior changes.
+4. Update the relevant documentation when an option, environment variable, artifact, or limitation changes.
+5. Run the checks below before opening the pull request.
 
-Run the same gates CI enforces:
+Use synthetic fixtures with reserved domains and documentation/private address ranges. If a test needs noisy or large input, prefer a deterministic generator over a large committed capture.
+
+## Checks
+
+The quick local pass is:
 
 ```powershell
 python -m ruff check src tests scripts
 python -m mypy src
 python -m pytest -q
 python scripts/check_markdown_links.py
+```
+
+CI also enforces strict pipeline typing, dead-code and security checks, at least 80% coverage, golden snapshots, package validation, and the bounded 10k benchmark. To mirror the non-performance checks:
+
+```powershell
+python -m bandit -q -r src -lll
+python -m pip_audit --local --skip-editable
+python scripts/scan_tracked_secrets.py --repo-root . --include-untracked
+python -m mypy --strict src/wazuh_sysmon_triage/pipeline
+python -m vulture src tests --min-confidence 80
+python -m pytest -q --cov=src/wazuh_sysmon_triage --cov-report=term-missing --cov-fail-under=80 --ignore=tests/test_golden_snapshots.py
+python -m pytest -q tests/test_golden_snapshots.py
 python -m build
 python -m twine check dist/*
-python scripts/benchmark_offline.py --source-events 10000 --selected-events 10000 --repeat 2 --max-seconds 30 --max-rss-mib 512 --report benchmark-report-10k.json
 ```
 
-Recommended additional checks:
-```powershell
-python -m ruff check src tests
-python -m mypy src
-```
+The performance command and thresholds are documented in [docs/PERFORMANCE.md](docs/PERFORMANCE.md). The convenience release gate is useful, but it does not run every CI security/build check and its live probe does not contact Wazuh.
 
-## Code Standards
+## Pull request checklist
 
-- Prefer smallest safe change over broad refactors.
-- Keep CLI and artifact contracts stable; new behavior should be additive.
-- Use explicit errors with stable status codes and clear messages.
-- Avoid introducing new global state.
-- Use synthetic fixtures with reserved domains and address ranges; never commit real telemetry.
+- [ ] New behavior is covered by a test.
+- [ ] Existing tests still pass.
+- [ ] CLI and artifact documentation reflects the new behavior.
+- [ ] `docs/ENV_VARS.md` is updated if configuration changed.
+- [ ] Credential, TLS, path, and evidence-handling impact was reviewed.
+- [ ] Every new sample is synthetic and contains no real identity.
+- [ ] Fetch, normalization, correlation, and rendering costs remain bounded.
 
-## PR Checklist
+`main` is protected, so changes land through a pull request after the required `quality-gate` check passes.
 
-- [ ] Behavior is covered by tests.
-- [ ] Existing tests remain green.
-- [ ] CLI and output contract docs updated when needed.
-- [ ] Env var docs updated (`docs/ENV_VARS.md`) when needed.
-- [ ] Security impact reviewed (credentials, TLS, paths, and secrets).
-- [ ] New samples contain synthetic data only.
-- [ ] Performance impact reviewed for fetch, normalization, correlation, and rendering paths.
-
-## Commit Message Guidance
-
-Use concise conventional style:
-- `feat: ...`
-- `fix: ...`
-- `chore: ...`
-- `docs: ...`
-- `test: ...`
-
-## Incident/Operations Docs
-
-Operational runbooks live in `docs/runbooks/`.
-Architectural decisions are captured under `docs/decisions/`.
+Short commit subjects such as `fix: ...`, `docs: ...`, `test: ...`, and `feat: ...` fit the existing history well.

@@ -1,38 +1,48 @@
-# Example configuration for wazuh-sysmon-triage.
-# Copy this file to `config.local.yaml`, then keep secrets in environment variables or
-# a secret manager. Never commit credentials or real evidence to this repository.
+# Copy this file to config.local.yaml and replace the lab placeholders.
+# config.local.yaml is ignored by Git. Keep passwords out of YAML.
 
-## Time window
-## - You may set `start`/`end` here OR provide them on the CLI.
-## - ISO8601 UTC examples: "2026-02-10T00:00:00Z"
-# start: "2026-02-10T00:00:00Z"
-# end: "2026-02-10T02:00:00Z"
-
-## Agent filter (use either)
-agent_id: "MyAgentID"
-agent_name: "MyAgentName"
-
-## Output
-out_dir: "./out"
-
-## OpenSearch / Wazuh Indexer API endpoint
-## Wazuh Indexer uses 9200/TCP by default. This is not the Dashboard on 443/TCP.
+# Wazuh Indexer/OpenSearch API. This is normally port 9200, not the
+# Wazuh Dashboards interface on port 443.
 host: "https://indexer:9200"
 user: "triage-readonly"
 verify_tls: true
-# Credentials policy:
-# - Do not store passwords in config files.
-# - Set WAZUH_OS_PASSWORD in your shell/session before live runs.
 
-## Index selection
+# The normal Wazuh alert pattern. Use --context-index-pattern with
+# triage alert when indexed archives are available for fuller context.
 index_pattern: "wazuh-alerts-4.x-*"
 
-## Supported high-value Windows Event IDs.
-## Security 4624 is query-filtered to logon types 3 and 10.
+# Case bundles are written below this directory.
+out_dir: "./out"
+
+# Supported Windows evidence. Security 4624 is further filtered to
+# network and remote-interactive logon types 3 and 10.
 event_ids: [1, 3, 5, 10, 11, 12, 13, 14, 22, 23, 26, 4624, 4697, 4698]
 
-## Local behavior-rule suppression
-## CLI allowlist values override config when provided.
+# Choose one profile by default. The CLI flag --profile overrides this.
+active_profile: soc
+
+profiles:
+  soc:
+    # Replace this with the Wazuh agent name you actually enrolled.
+    agent_name: "windows-lab-01"
+    alerts_only: true
+    print_stats: true
+  dev:
+    alerts_only: false
+    print_stats: true
+  lab:
+    alerts_only: true
+    print_stats: true
+    # Convenient for a disposable self-signed lab, but the CLI warns
+    # because disabling verification permits MITM attacks.
+    verify_tls: false
+
+# If you prefer an ID, put agent_id in the selected profile instead.
+# When both agent_id and agent_name are set, the default --agent-mode all
+# requires an event to match both selectors.
+
+# Process basenames in this list do not emit local behavior findings.
+# Suppression counts remain visible in the case artifacts.
 alert_allowlist_basenames:
   - MsMpEng.exe
   - MpCmdRun.exe
@@ -43,62 +53,49 @@ alert_allowlist_basenames:
   - msedge.exe
   - firefox.exe
 
+# Add narrow environment-specific suppressions rather than broad rules
+# that can hide unrelated evidence.
 suppressions:
   rules:
     - name: trusted-browser-outbound
-      image_glob: "*\\chrome.exe"
+      image_glob: '*\chrome.exe'
       destination_class: public
       enabled: true
   allowlist_override:
     - name: keep-lolbin-visible
-      image_glob: "*\\mshta.exe"
+      image_glob: '*\mshta.exe'
       enabled: true
 
-## Context roles (tags only; no hard suppression)
+# Context roles add tags only; they do not change finding strength.
 context_roles:
   developer:
     agent_names: ["dev-laptop-01", "dev-laptop-02"]
-    users: ["HOST\\alice", "HOST\\bob"]
-    process_image_contains: ["\\.vscode\\", "powershelleditorservices"]
+    users: ['HOST\alice', 'HOST\bob']
+    process_image_contains: ['\.vscode\', powershelleditorservices]
 
-## Optional retention policy for auto-pruning old case folders under out_dir
+# Optional automatic pruning under out_dir. Review these values against
+# your evidence-retention policy before enabling them.
 artifact_retention:
-  enabled: true
+  enabled: false
   max_age_days: 30
   max_total_size_mb: 2048
   min_keep_runs: 10
 
-## Profile presets (base defaults <- profile <- explicit CLI flags)
-active_profile: soc
-profiles:
-  soc:
-    agent_name: anon
-    event_ids: [1, 3, 5, 10, 11, 12, 13, 14, 22, 23, 26, 4624, 4697, 4698]
-    alerts_only: true
-    print_stats: true
-  dev:
-    event_ids: [1, 3, 5, 10, 11, 12, 13, 14, 22, 23, 26, 4624, 4697, 4698]
-    alerts_only: false
-    print_stats: true
-  lab:
-    event_ids: [1, 3, 5, 10, 11, 12, 13, 14, 22, 23, 26, 4624, 4697, 4698]
-    alerts_only: true
-    print_stats: true
+# Optional fixed UTC window. Most interactive runs are easier with
+# --last, --today, or --yesterday.
+# start: "2026-08-18T00:00:00Z"
+# end: "2026-08-18T02:00:00Z"
 
-# You can also omit host/user here and set these environment variables:
-#   WAZUH_OS_HOST, WAZUH_OS_USER, WAZUH_OS_PASSWORD, WAZUH_OS_VERIFY_TLS
-
-# Example command using this config:
+# Set the password in the current shell or a secret manager:
 #
 #   $env:WAZUH_OS_PASSWORD = "<password>"
-#   triage live --config config.example.yaml --last 2h --case-id INCIDENT-EXAMPLE-001
+#   triage live --last 2h --case-id LAB-001
 #
-# Recommended (short live command with built-in relative time parsing):
+# The CLI also reads WAZUH_OS_HOST, WAZUH_OS_USER, and
+# WAZUH_OS_VERIFY_TLS. It does not automatically load .env files.
 #
-#   triage live --config config.local.yaml --last 2h --case-id incident-002-eid1-3-11 --no-verify-tls
-#
-# If you are using an SSH tunnel to reach a localhost-bound indexer:
+# If the Indexer is only reachable from its host:
 #
 #   ssh -N -L 9920:localhost:9200 <user>@<wazuh-indexer>
 #   $env:WAZUH_OS_HOST = "https://127.0.0.1:9920"
-#   triage live --no-verify-tls --config config.example.yaml --last 2h --case-id INCIDENT-TUNNEL-EXAMPLE-001
+#   triage live --last 15m --case-id LAB-TUNNEL --no-verify-tls
